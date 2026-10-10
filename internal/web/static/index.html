@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex,nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src https: http:; base-uri 'none'; form-action 'none'">
+<title>Login</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="login.css">
+</head>
+<body>
+<main>
+  <h1 id="title">Login</h1>
+  <p class="sub" id="sub">What you type is encrypted in this page, with the key from your DingTalk link, before it leaves your browser.</p>
+  <noscript><p class="bad">This page needs JavaScript to encrypt your input. Enable it and reload.</p></noscript>
+
+  <section id="paste" hidden>
+    <label for="link">Paste the login link from DingTalk</label>
+    <textarea id="link" rows="4" spellcheck="false" autocomplete="off"></textarea>
+    <div class="row"><button class="primary" id="use-link" type="button">Continue</button></div>
+  </section>
+
+  <section id="main" hidden>
+    <div class="verify">
+      <p><strong>Check before typing anything.</strong> This code must be identical to the key code in the
+      DingTalk message that brought you here. If it differs or there is no such message, close this page.</p>
+      <p class="code" id="d-code"></p>
+      <label><input type="checkbox" id="verified"> <span>I compared the code with the DingTalk message</span></label>
+    </div>
+    <dl>
+      <dt>Site</dt><dd id="d-site"></dd>
+      <dt>Step</dt><dd id="d-mode"></dd>
+      <dt>Tunnel host</dt><dd id="d-host"></dd>
+      <dt>Key fingerprint</dt><dd id="d-fpr"></dd>
+    </dl>
+    <form id="form" autocomplete="off" novalidate>
+      <div id="fields"></div>
+      <div id="reject-box" hidden>
+        <label for="reason">Reason for rejecting (optional, sent to the AI agent)</label>
+        <textarea id="reason" rows="3" maxlength="500"></textarea>
+      </div>
+      <div class="row">
+        <button class="primary" id="submit" type="submit" disabled>Submit</button>
+        <button id="reject" type="button">Reject</button>
+        <button id="reject-cancel" type="button" hidden>Back</button>
+      </div>
+    </form>
+  </section>
+  <div id="msg" role="status" aria-live="polite"></div>
+  <p class="foot">Login page <span id="ver"></span></p>
+</main>
+<script src="openpgp.min.js"></script>
+<script src="login.js"></script>
+</body>
+</html>
