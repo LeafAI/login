@@ -184,13 +184,28 @@ login. Endpoints, payloads, session/CSRF handling and the 2FA flow were checked 
 of both generations, then exercised against fake servers that reproduce those contracts (including 1.x's HTML
 error pages).
 
-**Verified against live systems** (a real DingTalk robot, the SSH tunnel, the real login page and real accounts):
-**Archery 1.x** (login with TOTP, instances, groups, read-only queries, submit and cancel of a no-op workflow, Reject and the
-cool-down), **Nightingale** (login, token used on its API), **KubeSphere 3.4.1** (LDAP; see below) and **GitLab 19.2 (JiHu)**
-(LDAP with TOTP, session used on the API). In each case a forged or missing credential was refused by the site.
+**Verified against live systems** (a real DingTalk robot, the SSH tunnel, the real login page and real accounts). In every
+case the session was used on the site's own API, and a forged or missing credential was refused by the site:
 
-**Not verified against live systems:** the individual SSH provider services (use `login doctor -tunnel`) and the live
-Kibana, Jenkins and SkyWalking endpoints. **Jenkins** (2.226) was checked against its source: the login form action is read from the page
+| Site | What was exercised |
+|---|---|
+| Archery 1.x | login with TOTP, instances, groups, read-only queries, submit and cancel of a no-op workflow, Reject and the cool-down |
+| Nightingale v7 | login, token used on its API |
+| KubeSphere 3.4.1 | LDAP login the way the web console does it (JSON body with `title`, success as 302 with the tokens in `Set-Cookie`), token probe |
+| GitLab 19.2 (JiHu) | LDAP login with TOTP |
+| Kibana 7.9.3 | login with the flat `{username,password}` body, session probe, search through the console proxy |
+| Jenkins 2.226 | login (`j_acegi_security_check`), success decided by the `anonymous` flag of `/whoAmI/api/json`, the session-bound `Jenkins-Crumb` equals what `crumbIssuer` issues, a job listing that anonymous users get a 403 for |
+| SkyWalking 8.9.0 | no login needed: the URL answers and the GraphQL API returns data |
+
+Real runs also found and fixed bugs that the fake servers had hidden: KubeSphere's request body and success response, its token
+probe (it accepted any token, because the redirect to the login page answers 200), and Kibana 7.x's request body; and, in the
+tunnel, a provider whose process was alive while its public name was not routed (the link is now checked before it is sent). The
+two optional TOTP factors (unlock code of 10 minutes and sealing code of 30 seconds, both 8 digits, in 1Password) were exercised
+live on Kibana and Jenkins.
+
+What each driver was checked against in the source, besides the live run above:
+
+**Jenkins** (2.226) was checked against its source: the login form action is read from the page
 (`j_acegi_security_check` in 2.226, `j_spring_security_check` in newer releases), success is decided by
 `/whoAmI/api/json` (an anonymous visitor also reports `authenticated: true`, so the `anonymous` flag is used), and
 the session-bound CSRF crumb is returned as the `Jenkins-Crumb` header for POST requests. Core Jenkins has no
@@ -200,6 +215,14 @@ against its source and a browser capture of a real console login: LDAP users mus
 (the local `/oauth/token` grant cannot authenticate them), the provider is discovered from the published OAuth
 config, the body is JSON, and success is a 302 whose `Set-Cookie` carries the tokens. A wrong password and an
 unreachable LDAP both answer `200 {"status":500}`, so that message names both causes. **Kibana**'s login route and provider discovery were checked against
-its source. **Nightingale** (v7) was checked against its source: login payload, the optional math-image captcha (shown to
-the human inside the login step) and optional RSA password encryption. Kibana has no
-TOTP in stock form; their OTP retry path is a guess for custom setups and has never run against a real one.
+its source, and 7.9.3 against a live site. **Nightingale** (v7) was checked against its source: login payload, the optional math-image captcha (shown to
+the human inside the login step) and optional RSA password encryption.
+
+**Not verified against live systems:**
+- the individual SSH provider services (use `login doctor -tunnel`);
+- Kibana's, Jenkins's and KubeSphere's second-factor paths: stock versions have none, and the retry path for custom setups is a
+  guess that has never run against a real one (a 2FA plugin's extra step on Jenkins is reported as an error, not guessed);
+- Nightingale's optional captcha and RSA password encryption (this instance has neither);
+- other versions than the ones in the table: GitLab 16.8, Kibana 8.x, Nightingale versions other than v7 and the newer
+  Archery REST generation were checked against their source (and fake servers) only; the versions in the table are the ones
+  that were run.
