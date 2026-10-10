@@ -18,11 +18,14 @@ Agent ──login(url)──▶ MCP server (stdio)
   0. cache hit & still valid? ──yes──▶ return cached session
   1. resolve site driver from URL (host match / explicit `site` arg)
   2. take a GPG key from the pool (each key: <= 8 uses and <= 24 h, then retired)
-  3. start one-shot HTTP server on 127.0.0.1:<random port>
+  3. start a one-shot JSON API server on 127.0.0.1:<random port> (serves NO html)
   4. start SSH tunnel (provider chain, first one that yields an https URL wins)
-  5. DingTalk robot ──▶ human: page URL + armored PUBLIC KEY (the key is NOT served by the page)
-Human opens page ─▶ page loads openpgp.js (embedded); human PASTES the public key from DingTalk
-  6. human types credential; browser PGP-encrypts to the pasted key {fields, nonce, ts}; POST /<t>/submit
+  5. DingTalk robot ──▶ human: a "connection string" = tunnel API URL + token + armored PUBLIC KEY,
+     plus the address of the trusted static page (never served through the tunnel)
+Human opens the trusted static page (hosted by us / saved locally) and PASTES the connection string
+  6. page GETs <tunnel>/<t>/mode -> {site, mode: login|totp|...}; renders the matching form itself;
+     browser PGP-encrypts {fields, nonce, ts} to the pasted key; POST <tunnel>/<t>/submit
+     (the page then polls /status; a TOTP step repeats 6 with mode=totp)
   7. server decrypts, validates nonce/ts/token, answers 200, shuts down tunnel+server
   8. site driver runs the real login flow (CSRF, 2FA, ...) with a cookie-jar client
   9. result {cookies, headers, token, expires_at} ──▶ agent
@@ -38,7 +41,8 @@ main.go                      # package main: flags/config, wire everything, serv
 internal/
   mcpserver/                 # tool registration (login, login_sessions, logout, archery_*)
   keyring/                   # GPG key pool (≤8), generate/reuse, armored export, decrypt
-  webui/                     # one-shot server + embedded login.html, openpgp.min.js (go:embed)
+  api/                       # one-shot JSON API behind the tunnel: /mode, /submit, /status (no HTML)
+  web/                       # static login.html + vendored openpgp.min.js (go:embed; see 4.3)
   tunnel/                    # Provider interface, built-ins, custom providers, ssh runner, fallback
   notify/                    # DingTalk robot client (HMAC-SHA256 signed webhook)
   site/                      # Driver interface + registry
@@ -100,23 +104,39 @@ tunnel:
 ```
 (`url` for fixed-address servers, `url_regex` for ones that print a random URL.)
 
-### 4.3 Web page (`webui`)
-- Route is `/<128-bit random token>`; everything else 404. Bound to 127.0.0.1 only; reachable
-  solely through the tunnel. CSP `default-src 'self'`, no external requests, `no-store`.
-- `GET /<t>` → page showing site name and the fields requested by the driver (`username`,
-  `password`, optional `otp`/`captcha`), plus a **"Paste public key from DingTalk"** box.
-  The server never serves the public key; the browser encrypts only to the key the human pasted
-  and shows its fingerprint next to the one in the DingTalk message.
-- `POST /<t>/submit` → body is an armored PGP message. Plaintext = JSON
-  `{fields, nonce, ts}`; server rejects wrong nonce, ts skew > 2 min, second submission.
-- Driver can request a second round (e.g. OTP needed after password) by returning
-  `NeedMore{fields}`; the same one-shot server serves one more round, still token-bound.
+### 4.3 Static page + one-shot API (`web`, `api`)
+The tunnel carries **only JSON**. All JavaScript comes from a static page that does not travel
+through the tunnel, so a malicious provider has no script to tamper with.
+
+Static page (`web/login.html`, single file with vendored `openpgp.js`, no external requests):
+- Obtained from a trusted origin, in order of preference: (a) `login page` subcommand writes it
+  to disk (it is embedded in the binary the user installed) and the user opens it as a local file;
+  (b) a version-pinned copy on GitHub Pages for the repo/tag, URL given in the DingTalk message
+  together with its SHA-256.
+- The user pastes the connection string from DingTalk (`login1.<base64url{api_url, token, pubkey}>`).
+  The page parses it, shows the key fingerprint and the API host, and calls the API.
+- Renders the form for the mode returned by the API. Mode data is **untrusted**: the page only
+  accepts a whitelist (`login` = username+password, `totp` = code, `custom` = list of
+  `{name, label, secret?}` text inputs), writes text with `textContent`, never `innerHTML`.
+- Encrypts to the **pasted** key only (never to a key received from the API) and POSTs the
+  armored message.
+
+API (random 128-bit token in the path, bound to 127.0.0.1, reachable only via the tunnel):
+- `GET  /<t>/mode`   -> `{site, mode, fields[], round}` (what the driver needs now)
+- `POST /<t>/submit` -> body is an armored PGP message; plaintext JSON `{fields, nonce, ts, round}`.
+  Rejected on wrong token/nonce/round, ts skew > 2 min, or replay.
+- `GET  /<t>/status` -> `{state: waiting|working|need_more|done|failed, message}`.
+- CORS: `Access-Control-Allow-Origin: *` (no cookies/credentials are involved; also needed for a
+  `file://` origin), `Cache-Control: no-store`, no HTML served, other paths 404.
+- Multi-round: the driver can answer `NeedMore{mode: totp}` after the password step; the same
+  token serves the next round. The server shuts down on `done`/`failed`/TTL (default 10 min).
 
 ### 4.4 DingTalk robot (`notify`)
 Custom-robot webhook `https://oapi.dingtalk.com/robot/send?access_token=…`, with optional
 signing secret (`timestamp\nsecret` HMAC-SHA256, base64, url-encoded) and keyword/IP-allowlist
-compatible text. Sends a markdown message: site, requester ("agent asked for login"), page link, the **armored
-public key in a code block** (to be copied), its fingerprint, expiry time. `@mobiles` configurable.
+compatible text. Sends a markdown message: site, requester ("agent asked for login"), the static page address (+ its
+SHA-256), the **connection string in a code block** (to be copied), the key fingerprint, expiry
+time. `@mobiles` configurable.
 
 ### 4.5 Site drivers (`site`)
 ```go
@@ -190,8 +210,8 @@ If the wait exceeds the MCP client's patience, return `{status: "pending", workf
 agent resumes with `archery_wait(workflow_id)` — the call is idempotent, never double-executes
 (guarded by workflow status + a local lock file).
 Execution after approval is **automatic** (decided). Safeguards: never auto-approves; executes only
-after Archery reports the workflow approved; DDL is refused unless `allow_ddl: true` (default false,
-my proposal).
+after Archery reports the workflow approved. DDL is allowed by default; set `archery.allow_ddl: false`
+in the config to refuse it.
 
 ## 6. Configuration
 
@@ -210,23 +230,26 @@ MCP registration: `claude mcp add login -- login`.
 
 ## 8. Threat model & caveats
 
-- **Tunnel provider terminates TLS and serves the page.** Because the public key travels over
-  DingTalk and is pasted by the human, a malicious provider can no longer substitute its own key
-  (the page has no key to swap), and passive logging only yields ciphertext.
-- **Remaining gap:** an *active* provider that rewrites the page's JavaScript can still exfiltrate the
-  plaintext before encryption; pasting the key does not stop that. Mitigations: unguessable one-shot
-  path, short TTL, self-hosted/custom provider for sensitive sites. Optional hardened mode (later):
-  the human opens a locally saved, version-pinned `login.html` from the release assets and only the
-  encrypted POST goes through the tunnel.
+- **Tunnel provider sees only API traffic.** It terminates TLS but serves no script and no key.
+  Credentials are encrypted in the browser, by trusted JavaScript, to a key delivered over DingTalk;
+  the provider can log or tamper with ciphertext but cannot read it or substitute a key.
+- **What a malicious provider can still do:** lie in `/mode` (wrong site name, ask for an extra
+  field such as a TOTP), drop/delay requests (DoS), or learn that a login happened. The page treats
+  API data as untrusted (whitelist of modes, `textContent`) and shows the API host + key
+  fingerprint so the human can sanity-check against DingTalk. The user should type only what the
+  page's declared site expects; nothing a lying API requests can be decrypted by the provider.
+- **Residual trust:** the static page's origin. A local file from the installed binary is the
+  strongest; the Pages copy relies on GitHub + the SHA-256 in the DingTalk message.
+  DingTalk is trusted to deliver the connection string unmodified.
 - Private key stays local, 0600; plaintext password zeroed after use, never logged; MCP responses
-  contain only cookies/tokens. Replay protection via nonce+ts; token compared constant-time.
+  contain only cookies/tokens. Replay protection via nonce+ts+round; token compared constant-time.
 - Returned cookies are secrets handed to the agent by design; `login_sessions` never prints them.
 - SSH host keys: `accept-new` trust-on-first-use.
 
 ## 9. Milestones
 
 1. Skeleton: module, MCP stdio server, config, `login` returning a stub.
-2. keyring + webui + one-shot server (local only) + PGP round-trip.
+2. keyring + static page + one-shot JSON API (local only) + PGP round-trip, multi-round (login -> totp).
 3. tunnel providers + DingTalk notify → full human loop.
 4. Drivers: gitlab, kibana, kubesphere, nightingale, archery, skywalking, generic.
 5. Session cache/probe/singleflight.
@@ -235,11 +258,15 @@ MCP registration: `claude mcp add login -- login`.
 
 ## 10. Decisions
 
-1. SkyWalking: no login for now → `noauth` driver.
+1. SkyWalking: no login for now -> `noauth` driver.
 2. SSH-J: TCP-kind provider, excluded from the web fallback chain.
 3. Nightingale v7.
 4. Key pair limit: <= 8 uses or <= 24 h per key pair (not a pool-size cap).
 5. DingTalk: signed custom-robot webhook, one-way.
-6. Archery: execute automatically after approval.
+6. Archery: execute automatically after approval; DDL allowed by default, `archery.allow_ddl: false`
+   disables it.
+7. Tunnel serves JSON API only; the login/TOTP form comes from a trusted static page where the user
+   pastes the connection string (API URL + token + public key).
 
-Still open: block DDL by default in `archery_run_sql` (proposed: yes).
+Still open: where the trusted static page is hosted besides the local file (GitHub Pages under the
+repo is assumed; needs the repo to have a `main` branch/Pages enabled).
