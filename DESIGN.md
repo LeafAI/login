@@ -17,12 +17,12 @@ kibana, kubesphere, nightingale, archery, gitlab.
 Agent ──login(url)──▶ MCP server (stdio)
   0. cache hit & still valid? ──yes──▶ return cached session
   1. resolve site driver from URL (host match / explicit `site` arg)
-  2. take a GPG key from the pool (≤ 8 keys, reuse)
+  2. take a GPG key from the pool (each key: <= 8 uses and <= 24 h, then retired)
   3. start one-shot HTTP server on 127.0.0.1:<random port>
   4. start SSH tunnel (provider chain, first one that yields an https URL wins)
-  5. DingTalk robot ──▶ human: "login to <site>: https://xxx.pinggy.link/<token>"
-Human opens page ─▶ page loads openpgp.js (embedded) + public key
-  6. human types credential; browser PGP-encrypts {fields, nonce, ts}; POST /submit/<token>
+  5. DingTalk robot ──▶ human: page URL + armored PUBLIC KEY (the key is NOT served by the page)
+Human opens page ─▶ page loads openpgp.js (embedded); human PASTES the public key from DingTalk
+  6. human types credential; browser PGP-encrypts to the pasted key {fields, nonce, ts}; POST /<t>/submit
   7. server decrypts, validates nonce/ts/token, answers 200, shuts down tunnel+server
   8. site driver runs the real login flow (CSRF, 2FA, ...) with a cookie-jar client
   9. result {cookies, headers, token, expires_at} ──▶ agent
@@ -56,11 +56,15 @@ Dependencies: `modelcontextprotocol/go-sdk` (MCP), `ProtonMail/go-crypto/openpgp
 ## 4. Key components
 
 ### 4.1 Key pool (`keyring`)
-- Dir `~/.config/login/keys/` (0700), one armored private key per file, no passphrase
-  but file mode 0600 (key only protects one-shot, short-lived transport; see §8).
-- Cap = 8 (`max_keys`). Policy: if pool < 8 and no unused key → generate (ed25519+cv25519 or RSA-3072
-  for broad openpgp.js compatibility); else reuse the least-recently-used key. Never exceeds 8.
-- Optional expiry (30d) → expired keys are replaced in place, preserving the cap.
+- Dir `~/.config/login/keys/` (0700), one armored private key per file plus a small metadata
+  record `{created_at, uses}`; private key mode 0600, no passphrase (it only protects short-lived
+  transport; see section 8).
+- A key pair may be used **at most 8 times and for at most 24 h**, whichever comes first
+  (`max_uses: 8`, `max_age: 24h`, configurable). `Acquire()` returns a live key with the fewest
+  remaining uses and increments `uses` atomically (file lock, safe across processes), or generates a
+  new one when none is live. Retired keys are deleted on the next acquire.
+- Key type: Curve25519 (ed25519 + cv25519). The armored public key is ~400 bytes, practical to
+  copy/paste from DingTalk (RSA keys are 2-4x longer).
 
 ### 4.2 Tunnel providers (`tunnel`)
 ```go
@@ -99,8 +103,10 @@ tunnel:
 ### 4.3 Web page (`webui`)
 - Route is `/<128-bit random token>`; everything else 404. Bound to 127.0.0.1 only; reachable
   solely through the tunnel. CSP `default-src 'self'`, no external requests, `no-store`.
-- `GET /<t>` → page showing site name, fingerprint of the key, and fields requested by the
-  driver (`username`, `password`, optional `otp`/`captcha`).
+- `GET /<t>` → page showing site name and the fields requested by the driver (`username`,
+  `password`, optional `otp`/`captcha`), plus a **"Paste public key from DingTalk"** box.
+  The server never serves the public key; the browser encrypts only to the key the human pasted
+  and shows its fingerprint next to the one in the DingTalk message.
 - `POST /<t>/submit` → body is an armored PGP message. Plaintext = JSON
   `{fields, nonce, ts}`; server rejects wrong nonce, ts skew > 2 min, second submission.
 - Driver can request a second round (e.g. OTP needed after password) by returning
@@ -109,8 +115,8 @@ tunnel:
 ### 4.4 DingTalk robot (`notify`)
 Custom-robot webhook `https://oapi.dingtalk.com/robot/send?access_token=…`, with optional
 signing secret (`timestamp\nsecret` HMAC-SHA256, base64, url-encoded) and keyword/IP-allowlist
-compatible text. Sends a markdown message: site, requester ("agent asked for login"), link,
-key fingerprint (short), expiry time. `@mobiles` configurable.
+compatible text. Sends a markdown message: site, requester ("agent asked for login"), page link, the **armored
+public key in a code block** (to be copied), its fingerprint, expiry time. `@mobiles` configurable.
 
 ### 4.5 Site drivers (`site`)
 ```go
@@ -147,9 +153,9 @@ Phase-1 flows (to be verified against real instances during implementation):
 | GitLab | GET `/users/sign_in`, scrape `authenticity_token`, POST `user[login]`, `user[password]` (+ `user[otp_attempt]` on 2FA). Collect `_gitlab_session` |
 | Kibana | POST `/internal/security/login` (`kbn-xsrf: true`, provider basic). Collect `sid`. Fallback to legacy `/api/security/v1/login` |
 | KubeSphere | POST `/oauth/token` (password grant) → `access_token`/`refresh_token`; also v4 `/login` cookie path. Return bearer header |
-| Nightingale | POST `/api/n9e/auth/login` → `access_token`/`refresh_token`; return bearer header |
+| Nightingale (v7) | POST `/api/n9e/auth/login` → `access_token`/`refresh_token`; return bearer header |
 | Archery | GET `/login/` for `csrftoken`, POST `/authenticate/` (+2FA if enabled). Collect `sessionid`, `csrftoken` |
-| SkyWalking | UI has no built-in auth → depends on gateway; see open question 1 |
+| SkyWalking | No login needed today → `noauth` driver: `login` probes the URL, returns an empty session with `auth: none`, never prompts. `generic` can add basic/form auth later |
 
 ### 4.6 Sessions (`session`)
 In-memory cache keyed by `scheme://host`, TTL from driver; on `login` call, run `Probe` first and
@@ -183,8 +189,9 @@ Long-running calls emit MCP progress notifications (“waiting for human login�
 If the wait exceeds the MCP client's patience, return `{status: "pending", workflow_id}` and the
 agent resumes with `archery_wait(workflow_id)` — the call is idempotent, never double-executes
 (guarded by workflow status + a local lock file).
-Safeguards: refuses multi-statement DDL unless `allow_ddl`; never auto-approves; execution only
-after Archery reports approval.
+Execution after approval is **automatic** (decided). Safeguards: never auto-approves; executes only
+after Archery reports the workflow approved; DDL is refused unless `allow_ddl: true` (default false,
+my proposal).
 
 ## 6. Configuration
 
@@ -203,11 +210,14 @@ MCP registration: `claude mcp add login -- login`.
 
 ## 8. Threat model & caveats
 
-- **Tunnel provider can see TLS-terminated traffic.** PGP encryption in the browser protects the
-  credential against passive logging/at-rest storage at the provider, but an *active* malicious
-  provider could swap the page's JavaScript. Mitigations: random unguessable path + one-shot + short TTL;
-  fingerprint shown in both DingTalk and page for human comparison; self-hosted/custom
-  provider recommended for production. This cannot be fully eliminated with a third-party tunnel.
+- **Tunnel provider terminates TLS and serves the page.** Because the public key travels over
+  DingTalk and is pasted by the human, a malicious provider can no longer substitute its own key
+  (the page has no key to swap), and passive logging only yields ciphertext.
+- **Remaining gap:** an *active* provider that rewrites the page's JavaScript can still exfiltrate the
+  plaintext before encryption; pasting the key does not stop that. Mitigations: unguessable one-shot
+  path, short TTL, self-hosted/custom provider for sensitive sites. Optional hardened mode (later):
+  the human opens a locally saved, version-pinned `login.html` from the release assets and only the
+  encrypted POST goes through the tunnel.
 - Private key stays local, 0600; plaintext password zeroed after use, never logged; MCP responses
   contain only cookies/tokens. Replay protection via nonce+ts; token compared constant-time.
 - Returned cookies are secrets handed to the agent by design; `login_sessions` never prints them.
@@ -223,13 +233,13 @@ MCP registration: `claude mcp add login -- login`.
 6. Archery approval→sync tools.
 7. Docs, CI (`go vet`, tests), release tag.
 
-## 10. Open questions (need your decision)
+## 10. Decisions
 
-1. **SkyWalking auth**: the UI/OAP have no login. Which is it in your environment — nginx basic auth,
-   an SSO/OAuth2-proxy in front, or Apache APISIX/gateway? Default plan: HTTP Basic + form-login via `generic`.
-2. **SSH-J** forwards raw TCP, not HTTP, so it can't host the login page. Plan: include it as a
-   `TCP`-kind provider (exposed for custom use) but exclude it from the web fallback chain. OK?
-3. **"nightingare"** is assumed to be **Nightingale (n9e)**. Confirm, and which major version (v5/v6/v7)?
-4. **GPG limit of 8**: interpreted as "at most 8 key pairs on disk, reused afterwards". Correct?
-5. **DingTalk**: custom robot webhook (+ secret signing, one-way) is enough — no interactive callbacks. OK?
-6. **Archery**: can the agent also be allowed to execute after approval automatically (as designed), and should DDL be blocked by default?
+1. SkyWalking: no login for now → `noauth` driver.
+2. SSH-J: TCP-kind provider, excluded from the web fallback chain.
+3. Nightingale v7.
+4. Key pair limit: <= 8 uses or <= 24 h per key pair (not a pool-size cap).
+5. DingTalk: signed custom-robot webhook, one-way.
+6. Archery: execute automatically after approval.
+
+Still open: block DDL by default in `archery_run_sql` (proposed: yes).
