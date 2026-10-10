@@ -78,10 +78,13 @@ func TestFullStack(t *testing.T) {
 	cfg.DingTalk = config.DingTalk{Webhook: hook.URL + "/robot/send?access_token=TOKEN", Secret: secret}
 	cfg.Tunnel.Order = []string{"mycorp"}
 	cfg.Tunnel.Custom = []config.CustomProvider{{Name: "mycorp", Command: srv.ReverseCommand(remotePort), URL: fmt.Sprintf("http://127.0.0.1:%d", remotePort)}}
-	m, _, err := mcpserver.New(cfg, mcpserver.Options{Log: func(string, ...any) {}})
+	m, app, err := mcpserver.New(cfg, mcpserver.Options{Log: func(string, ...any) {}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The tunnel of a finished login is closed a moment after the page has read the outcome. The test ends sooner,
+	// so close the server explicitly: otherwise the real ssh process outlives the test as an orphan.
+	t.Cleanup(app.Close)
 	ct, st := mcp.NewInMemoryTransports()
 	if _, err := m.Connect(context.Background(), st, nil); err != nil {
 		t.Fatal(err)
