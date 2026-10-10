@@ -25,6 +25,24 @@ claude mcp add login -- login          # or add "login" to any MCP client's serv
 The static page is served by GitHub Pages (version-pinned) or from your disk (`login page [dir]`); the tunnel
 carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_TOOLS.md` (tool schemas).
 
+## Production deployment
+
+![login: production deployment architecture](docs/architecture.svg)
+
+`login` runs as one process next to the agent (`go install`, or the Docker image) and talks to the agent over stdio.
+Its config, key pool, encrypted sessions and audit log live in one private directory (a volume in Docker).
+Nothing listens on a public port: the only inbound path is the `ssh -R` tunnel that `login` itself opens, and it
+exists only while a person is being asked.
+
+1. The agent calls `login(url)`; the cookie or token goes back the same way.
+2. `login` sends one link through the DingTalk robot (signed webhook).
+3. The person receives it in DingTalk.
+4. The link opens the static page from GitHub Pages (or your own copy); it carries the key and tunnel address in
+   its `#fragment`, which no server sees.
+5. The page encrypts what the person types and posts it to the tunnel address; the provider sees ciphertext only.
+6. The tunnel forwards it to the one-shot API on `127.0.0.1`, where it is decrypted.
+7. The site driver runs the real login against the target site inside your network.
+
 ## Security notes
 
 - The static login page was reviewed in depth: see `docs/static-page-review.md` (findings, fixes, residual risks).
