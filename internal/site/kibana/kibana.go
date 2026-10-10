@@ -1,0 +1,150 @@
+// Package kibana logs in to Kibana's built-in basic (username/password) security provider.
+//
+// Verified against the Kibana source: POST /internal/security/login takes
+// {providerType, providerName, currentURL, params:{username,password}} and answers {"location": ...} with the
+// session cookie. providerName must match the configured provider (not always "basic"), so it is discovered
+// from the unauthenticated GET /internal/security/login_state.
+//
+// Kibana's built-in basic provider has no TOTP. As a courtesy for setups with a custom provider or a
+// fronting auth layer, a 401 whose body mentions OTP/MFA makes the driver ask for a "totp" round and
+// retry with params.otp. That path is a guess that has never run against a real second factor.
+package kibana
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/LeafAI/login/internal/site"
+)
+
+type driver struct{}
+
+func init() { site.Register(driver{}) }
+
+func (driver) Name() string     { return "kibana" }
+func (driver) NeedsLogin() bool { return true }
+func (driver) Match(u *url.URL) bool {
+	return strings.Contains(strings.ToLower(u.Hostname()), "kibana")
+}
+
+func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http.Client) (*site.Session, error) {
+	c := site.JarClient(hc)
+	creds, err := ask.Ask(ctx, "login", site.LoginFields)
+	if err != nil {
+		return nil, err
+	}
+	params := map[string]string{"username": creds["username"], "password": creds["password"]}
+	ptype, pname := loginProvider(ctx, c, base)
+	status, body, err := attempt(ctx, c, base, ptype, pname, params)
+	if err != nil {
+		return nil, err
+	}
+	if status == 401 && site.Looks2FA(body) {
+		code, err := ask.Ask(ctx, "totp", site.TOTPFields)
+		if err != nil {
+			return nil, err
+		}
+		params["otp"] = strings.TrimSpace(code["code"])
+		if status, body, err = attempt(ctx, c, base, ptype, pname, params); err != nil {
+			return nil, err
+		}
+	}
+	switch {
+	case status == 200 || status == 204:
+	case status == 401:
+		return nil, fmt.Errorf("%w: %s", site.ErrBadCredentials, site.Clip(body, 200))
+	default:
+		return nil, fmt.Errorf("%w: kibana returned %d: %s", site.ErrLoginRejected, status, site.Clip(body, 200))
+	}
+	s := &site.Session{Cookies: site.CookiesFrom(c, base)}
+	if len(s.Cookies) == 0 {
+		return nil, fmt.Errorf("%w: no session cookie was issued", site.ErrLoginRejected)
+	}
+	return s, nil
+}
+
+// loginProvider returns the first provider that uses the login form (basic or token); "basic"/"basic"
+// when the state endpoint is unavailable.
+func loginProvider(ctx context.Context, c *http.Client, base *url.URL) (typ, name string) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/internal/security/login_state", nil)
+	req.Header.Set("x-elastic-internal-origin", "kibana")
+	resp, err := c.Do(req)
+	if err != nil {
+		return "basic", "basic"
+	}
+	var st struct {
+		Selector struct {
+			Providers []struct {
+				Type          string `json:"type"`
+				Name          string `json:"name"`
+				UsesLoginForm bool   `json:"usesLoginForm"`
+			} `json:"providers"`
+		} `json:"selector"`
+	}
+	if resp.StatusCode == 200 {
+		json.Unmarshal([]byte(site.ReadBody(resp)), &st)
+	} else {
+		resp.Body.Close()
+	}
+	for _, p := range st.Selector.Providers {
+		if p.UsesLoginForm && p.Name != "" {
+			return p.Type, p.Name
+		}
+	}
+	return "basic", "basic"
+}
+
+func attempt(ctx context.Context, c *http.Client, base *url.URL, ptype, pname string, params map[string]string) (int, string, error) {
+	status, body, err := doLogin(ctx, c, base, "/internal/security/login", map[string]any{
+		"providerType": ptype, "providerName": pname, "currentURL": base.String() + "/login", "params": params})
+	if err == nil && status == 404 { // Kibana 7.x without the internal route
+		status, body, err = doLogin(ctx, c, base, "/api/security/v1/login", map[string]any{
+			"username": params["username"], "password": params["password"]})
+	}
+	return status, body, err
+}
+
+func doLogin(ctx context.Context, c *http.Client, base *url.URL, path string, payload any) (int, string, error) {
+	b, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base.String()+path, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("kbn-xsrf", "true")
+	req.Header.Set("x-elastic-internal-origin", "kibana")
+	resp, err := c.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%w: %v", site.ErrUnreachable, err)
+	}
+	return resp.StatusCode, site.ReadBody(resp), nil
+}
+
+func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *http.Client) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/internal/security/me", nil)
+	req.Header.Set("Cookie", site.CookieHeader(s.Cookies))
+	req.Header.Set("kbn-xsrf", "true")
+	req.Header.Set("x-elastic-internal-origin", "kibana")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("kibana session invalid: %s", resp.Status)
+	}
+	return nil
+}
+
+// Inspect reports the login providers Kibana publishes.
+func (driver) Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error) {
+	c := site.JarClient(hc)
+	typ, name := loginProvider(ctx, c, base)
+	out := []string{fmt.Sprintf("login provider that will be used: type %q, name %q", typ, name)}
+	if typ == "basic" && name == "basic" {
+		out = append(out, "(this is also the fallback when /internal/security/login_state is unavailable)")
+	}
+	return out, nil
+}

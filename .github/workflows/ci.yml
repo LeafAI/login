@@ -1,0 +1,29 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Browser end-to-end tests drive the real login page in headless Chromium.
+      - run: npm install -g playwright && npx playwright install --with-deps chromium
+      # Real-ssh tunnel test runs a throwaway sshd (it skips itself if sshd is unavailable).
+      - run: sudo mkdir -p /run/sshd
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build -ldflags "-X github.com/LeafAI/login/internal/mcpserver.Version=ci" -o /tmp/login . && /tmp/login version
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t login:ci --build-arg VERSION=ci .
+      - run: docker run --rm login:ci version
