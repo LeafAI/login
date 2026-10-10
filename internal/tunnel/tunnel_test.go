@@ -3,6 +3,7 @@ package tunnel
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,5 +107,19 @@ func TestCustomFixedURL(t *testing.T) {
 	defer tn.Close()
 	if tn.URL != "https://jump.corp:8123" {
 		t.Errorf("url %q", tn.URL)
+	}
+}
+
+// TestBuiltinCommandLinesParse lets the real ssh parse every built-in command line (ssh -G prints the
+// effective config without connecting), catching misspelt options or malformed -R specs.
+func TestBuiltinCommandLinesParse(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("ssh not available")
+	}
+	for name, p := range Builtins() {
+		args := append([]string{"-G"}, append(append([]string{}, sshBaseOpts...), p.Args(4321)...)...)
+		if out, err := exec.Command("ssh", args...).CombinedOutput(); err != nil {
+			t.Errorf("%s: ssh rejected %v: %v\n%s", name, args, err, out)
+		}
 	}
 }

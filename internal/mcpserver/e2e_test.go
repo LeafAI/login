@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/LeafAI/login/internal/browsertest"
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/flow"
 	"github.com/LeafAI/login/internal/mcpserver"
@@ -109,27 +108,8 @@ func human(t *testing.T, msg, dir, action, values, reason string) string {
 	i := strings.Index(msg, "](")
 	j := strings.Index(msg[i:], ")")
 	link := msg[i+2 : i+j]
-	frag := link[strings.Index(link, "#")+1:]
-	cmd := exec.Command("node", "../web/testdata/e2e.js", dir, frag, action, values, reason)
-	cmd.Env = append(os.Environ(), "NODE_PATH=/opt/node22/lib/node_modules")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("browser: %v", err)
-	}
-	return string(out)
-}
-
-// requireBrowser skips the test unless Node, Playwright and a Chromium are usable.
-func requireBrowser(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not available")
-	}
-	cmd := exec.Command("node", "-e", "require('playwright').chromium.executablePath()")
-	cmd.Env = append(os.Environ(), "NODE_PATH=/opt/node22/lib/node_modules")
-	if err := cmd.Run(); err != nil {
-		t.Skip("playwright not available")
-	}
+	r := browsertest.Drive(t, dir, browsertest.Fragment(link), action, values, reason)
+	return r.Msg
 }
 
 type env struct {
@@ -143,7 +123,7 @@ func setup(t *testing.T) *env { return setupWith(t, nil) }
 
 func setupWith(t *testing.T, tweak func(*config.Config)) *env {
 	t.Helper()
-	requireBrowser(t)
+	browsertest.Require(t)
 	dir := t.TempDir()
 	if err := web.WriteTo(dir); err != nil {
 		t.Fatal(err)

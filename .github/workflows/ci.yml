@@ -10,7 +10,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Browser end-to-end tests drive the real login page in headless Chromium.
+      - run: npm install -g playwright && npx playwright install --with-deps chromium
+      # Real-ssh tunnel test runs a throwaway sshd (it skips itself if sshd is unavailable).
+      - run: sudo mkdir -p /run/sshd
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
-      # Browser end-to-end tests skip themselves when node/Playwright/Chromium are unavailable.
       - run: go test -race ./...
