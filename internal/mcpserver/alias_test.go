@@ -10,6 +10,7 @@ import (
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/site"
 	_ "github.com/LeafAI/login/internal/site/gitlab"
+	_ "github.com/LeafAI/login/internal/site/kubesphere"
 
 	_ "github.com/LeafAI/login/internal/site/noauth"
 )
@@ -114,6 +115,14 @@ func TestRootsSupplyPathPrefix(t *testing.T) {
 }
 
 func TestSiteOptionsValidation(t *testing.T) {
+	// Driver options live on the process-wide driver instances: undo them so other tests are unaffected.
+	t.Cleanup(func() {
+		for _, name := range []string{"gitlab", "kubesphere"} {
+			if d, err := site.Resolve(name, nil); err == nil {
+				d.(site.Configurable).Configure(nil)
+			}
+		}
+	})
 	mk := func(opts map[string]map[string]string) error {
 		cfg, _ := config.Load(t.TempDir() + "/none.yaml")
 		cfg.Keys.Dir = t.TempDir()
