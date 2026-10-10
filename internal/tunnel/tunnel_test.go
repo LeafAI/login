@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -139,4 +141,72 @@ func TestDoneClosesWhenSSHExits(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Done did not close after the process exited")
 	}
+}
+
+// alive reports whether a process exists (signal 0 checks without disturbing it).
+func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
+
+func waitGone(t *testing.T, pid int, what string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if !alive(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Errorf("%s (pid %d) is still running after the tunnel was closed", what, pid)
+	syscall.Kill(pid, syscall.SIGKILL) // do not leave it behind
+}
+
+// A tunnel is one-shot: closing it must end the whole process tree, not only the process that was started.
+// Custom providers run through a command line (often a shell wrapper or a script that starts ssh), so a plain
+// Process.Kill would leave the real ssh behind, still holding the forwarded port and the public name.
+func TestCloseEndsTheWholeProcessTree(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	script := filepath.Join(dir, "ssh")
+	// The "ssh" prints its banner, starts a long-lived grandchild like a wrapper script would, and waits for it.
+	body := "#!/bin/sh\necho 'https://wrapped.lhr.life'\nsleep 300 &\necho $! > " + pidFile + "\nwait\n"
+	os.WriteFile(script, []byte(body), 0o755)
+	tn, err := (&Runner{SSH: script, Timeout: 5 * time.Second}).Start(context.Background(), []*Provider{Builtins()["localhost.run"]}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var child int
+	for i := 0; i < 100 && child == 0; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			child, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if child == 0 || !alive(child) {
+		t.Fatalf("test setup: the wrapper's child did not start (pid %d)", child)
+	}
+	parent := tn.cmd.Process.Pid
+	tn.Close()
+	waitGone(t, parent, "the tunnel process")
+	waitGone(t, child, "the child the tunnel process started")
+}
+
+// Close is safe to call again, from several places, and never blocks forever.
+func TestCloseIsIdempotentAndPrompt(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "ssh")
+	os.WriteFile(script, []byte("#!/bin/sh\necho 'https://x.lhr.life'\nsleep 300\n"), 0o755)
+	tn, err := (&Runner{SSH: script, Timeout: 5 * time.Second}).Start(context.Background(), []*Provider{Builtins()["localhost.run"]}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		tn.Close()
+		tn.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	waitGone(t, tn.cmd.Process.Pid, "the tunnel process")
 }

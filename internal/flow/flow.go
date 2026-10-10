@@ -59,7 +59,18 @@ type Config struct {
 	Tunnels  TunnelStarter
 	PageURL  string
 	TTL      time.Duration // per round
-	Grace    time.Duration // keep the API up after the end so the page can show the result
+	Grace    time.Duration // deprecated: the tunnel now closes when the page has read the outcome, or at OutcomeCap
+	// OutcomeCap is the longest the tunnel stays up after a login that ended while a page was listening (default
+	// 10 s): enough for the page's next poll to read the outcome. Every other ending closes the tunnel at once.
+	OutcomeCap time.Duration
+	// FlushDelay is how long the tunnel stays up after the page has read the final state, so that the response that
+	// carried it is delivered and a repeated poll is still answered (default 3 s). It is a delay, not a grace for
+	// waiting: the tunnel is closed when it ends.
+	FlushDelay time.Duration
+	// ProbeTimeout bounds the check that a new tunnel really carries traffic before its link is sent (default 8 s).
+	ProbeTimeout time.Duration
+	// OnTunnel, when set, is told which provider carries a flow's tunnel (for the audit log).
+	OnTunnel func(f *Flow, provider string, attempts int)
 	Log      func(format string, args ...any)
 	// Admit, when set, is asked before a NEW flow bothers a human (a request that joins a running flow is
 	// not asked again). A non-nil error refuses the flow: Start returns it already finished with that error.
@@ -83,6 +94,15 @@ func NewManager(cfg Config) *Manager {
 	}
 	if cfg.Grace == 0 {
 		cfg.Grace = 30 * time.Second
+	}
+	if cfg.OutcomeCap == 0 {
+		cfg.OutcomeCap = 10 * time.Second
+	}
+	if cfg.FlushDelay == 0 {
+		cfg.FlushDelay = 3 * time.Second
+	}
+	if cfg.ProbeTimeout == 0 {
+		cfg.ProbeTimeout = 8 * time.Second
 	}
 	return &Manager{cfg: cfg, flows: map[string]*Flow{}, byBase: map[string]*Flow{}}
 }
@@ -260,12 +280,72 @@ func (f *Flow) setup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tn, err := f.m.cfg.Tunnels.Start(ctx, port)
+	tn, err := f.openTunnel(ctx, port)
 	if err != nil {
 		srv.Close()
-		return fmt.Errorf("%w: %v", ErrTunnel, err)
+		return err
 	}
 	f.key, f.srv, f.port, f.tn = key, srv, port, tn
+	return nil
+}
+
+// maxTunnelStarts bounds how many tunnels one attempt may open and discard looking for one that works.
+const maxTunnelStarts = 4
+
+// openTunnel starts a tunnel and checks, from the outside, that it really carries traffic to this flow's API before
+// the caller may put its address in a link. A tunnel whose ssh process is alive but whose public name is not routed
+// (a 502 "no tunnel", seen on a free provider) is closed at once and replaced; a link is only ever built for a tunnel
+// that answered.
+func (f *Flow) openTunnel(ctx context.Context, port int) (Tunnel, error) {
+	var last error
+	for i := 1; i <= maxTunnelStarts; i++ {
+		tn, err := f.m.cfg.Tunnels.Start(ctx, port)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrTunnel, err)
+		}
+		if err := f.probeTunnel(ctx, tn.PublicURL()); err != nil {
+			f.logf("tunnel %s does not carry traffic (%v); replacing it", tn.PublicURL(), err)
+			tn.Close()
+			last = err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		if cb := f.m.cfg.OnTunnel; cb != nil {
+			cb(f, providerOf(tn), i)
+		}
+		return tn, nil
+	}
+	return nil, fmt.Errorf("%w: %d tunnels were opened and none carried traffic (last: %v)", ErrTunnel, maxTunnelStarts, last)
+}
+
+// providerOf names the provider behind a tunnel when it says so.
+func providerOf(tn Tunnel) string {
+	if p, ok := tn.(interface{ ProviderName() string }); ok {
+		return p.ProviderName()
+	}
+	return ""
+}
+
+// probeTunnel asks the tunnel's public address for a path that does not exist. Our API answers that with 404; a dead
+// route is answered by the provider itself (502, 503, 530...) or not at all. Anything but a 404 means the tunnel does
+// not reach this server.
+func (f *Flow) probeTunnel(ctx context.Context, publicURL string) error {
+	pctx, cancel := context.WithTimeout(ctx, f.m.cfg.ProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(pctx, http.MethodGet, strings.TrimRight(publicURL, "/")+"/tunnel-check", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("answered %d, not our API", resp.StatusCode)
+	}
 	return nil
 }
 
@@ -284,7 +364,7 @@ func (f *Flow) tunnelDown() bool {
 // restartTunnel replaces a dead tunnel; the API server (and its tokens) stay the same.
 func (f *Flow) restartTunnel(ctx context.Context) error {
 	f.tn.Close()
-	tn, err := f.m.cfg.Tunnels.Start(ctx, f.port)
+	tn, err := f.openTunnel(ctx, f.port)
 	if err != nil {
 		return fmt.Errorf("%w: restart failed: %v", ErrTunnel, err)
 	}
@@ -387,28 +467,48 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 	}
 }
 
-// finish records the result, publishes the final status to the page and tears everything down.
+// finish records the result and ends the tunnel's life. A tunnel serves exactly one login:
+//   - when a page is listening (a human round was open) the tunnel stays only until that page has read the final
+//     state, or OutcomeCap passes if nobody reads it;
+//   - in every other case (no round was open: cancelled early, notification failed, no tunnel yet) it is closed
+//     right now.
 func (f *Flow) finish(sess *site.Session, err error) {
 	f.result = Result{Session: sess, Err: err}
 	f.set(Snapshot{Phase: "done"})
+	listening := false
 	if f.cur != nil {
 		var rj *RejectedError
 		switch {
 		case err == nil:
 			f.cur.SetStatus(api.StateDone, "")
+			listening = true
 		case errors.As(err, &rj):
 			f.cur.SetStatus(api.StateRejected, "")
+			listening = true
 		case errors.Is(err, site.ErrBadCredentials):
 			f.cur.SetStatus(api.StateFailed, "Wrong username or password.")
+			listening = true
+		case errors.Is(err, site.ErrLoginRejected), errors.Is(err, site.ErrUnreachable):
+			f.cur.SetStatus(api.StateFailed, "The site refused the login. Details were sent to the AI agent.")
+			listening = true
 		default:
 			f.cur.SetStatus(api.StateFailed, "The site refused the login. Details were sent to the AI agent.")
 		}
 	}
 	close(f.done)
-	if f.srv != nil {
-		time.AfterFunc(f.m.cfg.Grace, f.shutdown)
+	if f.srv == nil && f.tn == nil {
+		return
 	}
+	if !listening || !f.pageIsListening() {
+		f.shutdown()
+		return
+	}
+	f.cur.OnFinalRead(func() { time.AfterFunc(f.m.cfg.FlushDelay, f.shutdown) })
+	time.AfterFunc(f.m.cfg.OutcomeCap, f.shutdown)
 }
+
+// pageIsListening reports whether a human round was open when the login ended, so a page may still poll.
+func (f *Flow) pageIsListening() bool { return f.cur != nil && f.tn != nil }
 
 func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, note string) string {
 	step := map[string]string{"login": "username & password", "totp": "two-factor code", "custom": "additional information"}[mode]

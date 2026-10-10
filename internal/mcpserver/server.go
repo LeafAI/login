@@ -97,7 +97,7 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	s.mgr = flow.NewManager(flow.Config{
 		Keys:     keyring.NewPool(cfg.Keys.Dir, cfg.Keys.MaxUses, cfg.Keys.MaxAge),
 		Notifier: s.notify, Tunnels: ts, PageURL: cfg.Web.PageURL, TTL: cfg.Web.TTL, Log: s.log,
-		Admit: s.admit, OnRound: s.onRound,
+		Admit: s.admit, OnRound: s.onRound, OnTunnel: s.onTunnel,
 	})
 	s.tracker = archery.NewTracker(cfg.Archery.DDLAllowed(), cfg.Archery.WaitTimeout)
 	s.tracker.Poll = cfg.Archery.PollInterval
@@ -303,4 +303,5 @@ func (t *tunnelStarter) Start(ctx context.Context, port int) (flow.Tunnel, error
 
 type tunnelAdapter struct{ *tunnel.Tunnel }
 
-func (a tunnelAdapter) PublicURL() string { return a.URL }
+func (a tunnelAdapter) PublicURL() string    { return a.URL }
+func (a tunnelAdapter) ProviderName() string { return a.Provider }

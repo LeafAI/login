@@ -97,6 +97,8 @@ type Round struct {
 	attempts int
 	done     bool
 	ch       chan Submission
+
+	onFinalRead func()
 }
 
 // NewRound registers a new round with a fresh random token.
@@ -133,6 +135,29 @@ func (r *Round) Status() Status {
 	return r.status
 }
 
+// OnFinalRead registers fn, called once when the page has read a final state (done, failed, rejected) of this round
+// by polling status. The tunnel is only needed until then.
+func (r *Round) OnFinalRead(fn func()) {
+	r.mu.Lock()
+	r.onFinalRead = fn
+	r.mu.Unlock()
+}
+
+func (r *Round) noteRead(st Status) {
+	switch st.State {
+	case StateDone, StateFailed, StateRejected:
+	default:
+		return
+	}
+	r.mu.Lock()
+	fn := r.onFinalRead
+	r.onFinalRead = nil
+	r.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", "*")
@@ -156,7 +181,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	switch {
 	case parts[1] == "status" && req.Method == http.MethodGet:
-		writeJSON(w, http.StatusOK, round.Status())
+		st := round.Status()
+		writeJSON(w, http.StatusOK, st)
+		round.noteRead(st)
 	case parts[1] == "submit" && req.Method == http.MethodPost:
 		s.submit(w, req, round)
 	default:

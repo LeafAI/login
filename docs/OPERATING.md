@@ -36,6 +36,11 @@ The login API runs on 127.0.0.1 and is exposed through `ssh -R`. Order and extra
   ones that pass from **your** network, and put them first in `tunnel.order`.
 * A server of your own is the most reliable option (`tunnel.providers`, see the README).
 * `ssh-j` forwards raw TCP only and is never used for the web API.
+* Tunnels are **one-shot**. Each is checked from outside before its link is sent (a provider's 502 "no tunnel" is
+  caught and the tunnel replaced, the person never sees it) and is closed, with every process it started, as soon as
+  the login ends, whatever the outcome. After a login there should be no `ssh -R` of `login` left:
+  `ps ax | grep 'ssh .*-R'`. The audit log says which provider carried each link
+  (`grep '"event":"tunnel"' audit.jsonl`).
 * If the tunnel drops while someone is typing, a new tunnel is started and a **replacement link** is sent
   (up to twice). The old link stops working.
 
@@ -95,7 +100,7 @@ agent may target, `security.allowed_hosts`.
 | Error code | Meaning | What to do |
 |---|---|---|
 | `notify_failed` | DingTalk refused or was unreachable | `login doctor -send`; check webhook, secret/keyword/IP rule |
-| `tunnel_unavailable` | no provider produced a URL | `login doctor -tunnel`; check outbound ssh; reorder or add a provider |
+| `tunnel_unavailable` | no provider produced a URL, or none of the tunnels opened carried traffic | `login doctor -tunnel`; check outbound ssh; reorder or add a provider |
 | `human_timeout` | nobody finished the step in `web.ttl` (10 min) | ask again; check the DingTalk group |
 | `user_rejected` | the human pressed Reject (the reason is in the message) | do not retry unless asked |
 | `bad_credentials` | the site refused the username/password/code | retry carefully: KubeSphere/GitLab/Jenkins may lock accounts after repeated failures |
