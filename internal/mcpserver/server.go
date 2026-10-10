@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -101,8 +102,11 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	s.tracker = archery.NewTracker(cfg.Archery.DDLAllowed(), cfg.Archery.WaitTimeout)
 	s.tracker.Poll = cfg.Archery.PollInterval
 
-	m := mcp.NewServer(&mcp.Implementation{Name: "login", Version: "0.1.0"}, nil)
-	s.register(m)
+	m := mcp.NewServer(&mcp.Implementation{Name: "login", Title: "Login gateway", Version: Version}, &mcp.ServerOptions{Instructions: instructions})
+	if err := s.register(m); err != nil {
+		return nil, nil, err
+	}
+	s.registerResources(m)
 	return m, s, nil
 }
 
@@ -125,37 +129,76 @@ func ApplySiteOptions(cfg *config.Config) error {
 // Close stops pending logins and their tunnels.
 func (s *Server) Close() { s.mgr.Close() }
 
-func (s *Server) register(m *mcp.Server) {
+func (s *Server) register(m *mcp.Server) error {
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true}
-	open := func(h bool) *mcp.ToolAnnotations {
+	open := func(idempotent bool) *mcp.ToolAnnotations {
 		v := true
-		return &mcp.ToolAnnotations{OpenWorldHint: &v, IdempotentHint: h}
+		return &mcp.ToolAnnotations{OpenWorldHint: &v, IdempotentHint: idempotent}
 	}
 	destructive := true
-	addTool(m, s.observe, "login", "Log in to a website (gitlab, kibana, kubesphere, nightingale, archery, skywalking, or a configured site) and return a valid cookie/token. A human types the credential on a page opened from a DingTalk link; the agent never sees the password. If still pending after max_block_seconds, call login_wait with the returned login_id.", open(false), s.login)
-	addTool(m, s.observe, "login_wait", "Resume a pending login started by `login`.", open(true), s.loginWait)
-	addTool(m, s.observe, "login_sites", "List the websites this server can log in to.", ro, s.sites)
-	addTool(m, s.observe, "login_sessions", "List cached login sessions (no secrets).", ro, s.sessions)
-	addTool(m, s.observe, "logout", "Forget the cached session for a URL (or all sessions) and cancel a pending login for it.", nil, s.logout)
-	addTool(m, s.observe, "archery_instances", "List Archery instances (and optionally an instance's databases) the user can access.", ro, s.archeryInstances)
-	addTool(m, s.observe, "archery_query", "Run a read-only SQL query through Archery's query endpoint (no approval needed).", ro, s.archeryQuery)
-	addTool(m, s.observe, "archery_run_sql", "Submit SQL to Archery, notify approvers, wait for approval, execute automatically and return the result, as one call. If approval takes longer than max_block_seconds a pending result with workflow_id is returned; continue with archery_wait.", &mcp.ToolAnnotations{DestructiveHint: &destructive}, s.archeryRunSQL)
-	addTool(m, s.observe, "archery_wait", "Continue waiting for an Archery workflow; executes it once when approved. Safe to call repeatedly.", &mcp.ToolAnnotations{IdempotentHint: true}, s.archeryWait)
-	addTool(m, s.observe, "archery_workflow_status", "Read the state of an Archery workflow.", ro, s.archeryStatus)
-	addTool(m, s.observe, "archery_cancel", "Abort an Archery workflow that has not started executing.", nil, s.archeryCancel)
+	for _, reg := range []func() error{
+		func() error {
+			return addTool(m, s.observe, spec[LoginOutput]{"login", "Log in to a website",
+				"Log in to a website (gitlab, jenkins, kibana, kubesphere, nightingale, archery, skywalking, or a configured site) and return a valid cookie/token. A human types the credential on a page opened from a DingTalk link; the agent never sees the password. If still pending after max_block_seconds, call login_wait with the returned login_id.", open(false)}, s.login)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[LoginOutput]{"login_wait", "Resume a pending login", "Resume a pending login started by `login`.", open(true)}, s.loginWait)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[SitesOutput]{"login_sites", "List supported websites", "List the websites this server can log in to.", ro}, s.sites)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[SessionsOutput]{"login_sessions", "List cached sessions", "List cached login sessions (no secrets).", ro}, s.sessions)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[LogoutOutput]{"logout", "Forget a session", "Forget the cached session for a URL (or all sessions) and cancel a pending login for it.", nil}, s.logout)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[InstancesOutput]{"archery_instances", "List Archery instances", "List Archery instances (and optionally an instance's databases) the user can access.", ro}, s.archeryInstances)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[QueryOutput]{"archery_query", "Run a read-only SQL query", "Run a read-only SQL query through Archery's query endpoint (no approval needed).", ro}, s.archeryQuery)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[ArcheryOut]{"archery_run_sql", "Submit SQL for approval and run it", "Submit SQL to Archery, notify approvers, wait for approval, execute automatically and return the result, as one call. If approval takes longer than max_block_seconds a pending result with workflow_id is returned; continue with archery_wait.", &mcp.ToolAnnotations{DestructiveHint: &destructive}}, s.archeryRunSQL)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[ArcheryOut]{"archery_wait", "Continue waiting for an Archery workflow", "Continue waiting for an Archery workflow; executes it once when approved. Safe to call repeatedly.", &mcp.ToolAnnotations{IdempotentHint: true}}, s.archeryWait)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[ArcheryStatusOrPending]{"archery_workflow_status", "Read an Archery workflow's state", "Read the state of an Archery workflow.", ro}, s.archeryStatus)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[ArcheryCancelOrPending]{"archery_cancel", "Abort an Archery workflow", "Abort an Archery workflow that has not started executing.", nil}, s.archeryCancel)
+		},
+	} {
+		if err := reg(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// observer is told about every finished tool call (for the audit log).
-type observer func(tool string, req *mcp.CallToolRequest, in, out any, terr *ToolError, took time.Duration)
+// spec describes one tool: its names, annotations and (via the type parameter) its result type.
+type spec[Out any] struct {
+	name, title, desc string
+	ann               *mcp.ToolAnnotations
+}
 
-// addTool registers a typed tool with structured success/error results.
-func addTool[In any](m *mcp.Server, obs observer, name, desc string, ann *mcp.ToolAnnotations,
-	h func(ctx context.Context, req *mcp.CallToolRequest, in In) (any, *ToolError)) {
+// addTool registers a typed tool with a generated input schema, a generated output schema, and
+// structured success/error results.
+func addTool[In, Out any](m *mcp.Server, obs observer, sp spec[Out],
+	h func(ctx context.Context, req *mcp.CallToolRequest, in In) (any, *ToolError)) error {
 	schema, err := jsonschema.For[In](nil)
 	if err != nil {
-		panic(fmt.Sprintf("schema for %s: %v", name, err))
+		return fmt.Errorf("input schema for %s: %w", sp.name, err)
 	}
-	m.AddTool(&mcp.Tool{Name: name, Description: desc, InputSchema: schema, Annotations: ann},
+	out, err := outputSchema(reflect.TypeFor[Out]())
+	if err != nil {
+		return fmt.Errorf("%s: %w", sp.name, err)
+	}
+	name := sp.name
+	m.AddTool(&mcp.Tool{Name: name, Title: sp.title, Description: sp.desc, InputSchema: schema, OutputSchema: out, Annotations: sp.ann},
 		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var in In
 			if len(req.Params.Arguments) > 0 {
@@ -166,20 +209,27 @@ func addTool[In any](m *mcp.Server, obs observer, name, desc string, ann *mcp.To
 				}
 			}
 			start := time.Now()
-			out, terr := h(ctx, req, in)
-			obs(name, req, in, out, terr, time.Since(start))
+			res, terr := h(ctx, req, in)
+			obs(name, req, in, res, terr, time.Since(start))
 			if terr != nil {
 				return toolError(terr), nil
 			}
-			b, _ := json.Marshal(out)
+			b, err := json.Marshal(res)
+			if err != nil {
+				return toolError(errf("internal", false, "encode result: %v", err)), nil
+			}
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}, StructuredContent: json.RawMessage(b)}, nil
 		})
+	return nil
 }
 
 func toolError(e *ToolError) *mcp.CallToolResult {
 	b, _ := json.Marshal(e)
 	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}, StructuredContent: json.RawMessage(b)}
 }
+
+// observer is told about every finished tool call (for the audit log).
+type observer func(tool string, req *mcp.CallToolRequest, in, out any, terr *ToolError, took time.Duration)
 
 func (s *Server) progress(ctx context.Context, req *mcp.CallToolRequest, n *float64, msg string) {
 	s.log("%s", msg)
