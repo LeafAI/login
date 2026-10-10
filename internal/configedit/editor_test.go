@@ -261,3 +261,29 @@ func TestSettingsCoverTheSchema(t *testing.T) {
 		t.Error("lists of entries are not settable as plain values")
 	}
 }
+
+func TestTOTPSettingsAreKnownAndTyped(t *testing.T) {
+	have := map[string]string{}
+	for _, s := range Settings() {
+		have[s.Path] = s.Type
+	}
+	for path, typ := range map[string]string{
+		"security.link_totp.enabled": "bool", "security.link_totp.period": "duration", "security.link_totp.digits": "int", "security.link_totp.secret_file": "string",
+		"security.seal_totp.enabled": "bool", "security.seal_totp.period": "duration", "security.seal_totp.digits": "int", "security.seal_totp.secret_file": "string",
+	} {
+		if have[path] != typ {
+			t.Errorf("setting %s: got type %q, want %q", path, have[path], typ)
+		}
+	}
+	p := write(t, "")
+	e, _ := Open(p)
+	if err := e.Set("security.link_totp.period", "10m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Set("security.link_totp.period", "tomorrow"); err == nil {
+		t.Error("a period that is not a duration was accepted")
+	}
+	if err := e.Set("security.link_totp.digits", "eight"); err == nil {
+		t.Error("digits that are not a number were accepted")
+	}
+}

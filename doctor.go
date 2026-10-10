@@ -18,6 +18,7 @@ import (
 	"github.com/LeafAI/login/internal/mcpserver"
 	"github.com/LeafAI/login/internal/notify"
 	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/login/internal/totp"
 	"github.com/LeafAI/login/internal/tunnel"
 )
 
@@ -186,7 +187,35 @@ func doctorGuards(cfg *config.Config, report func(bool, string, string)) {
 	} else {
 		fmt.Println("[note] audit.enabled is false: nothing records who asked for which login")
 	}
+	doctorFactors(cfg, report)
 	l := cfg.Limits
 	fmt.Printf("[note] people are asked at most %d times per site and %d overall per %s; a rejected site is paused for %s\n",
 		l.PerSite, l.Total, l.Window, l.RejectCooldown)
+}
+
+// doctorFactors checks the two TOTP factors. A factor that is on without a usable secret stops the server from
+// starting, so it is a failure here, not a note. Secrets and codes are never printed.
+func doctorFactors(cfg *config.Config, report func(bool, string, string)) {
+	if err := cfg.Validate(); err != nil {
+		report(false, "security factors", err.Error())
+		return
+	}
+	for _, f := range []struct {
+		name string
+		t    config.TOTP
+		hint string
+	}{
+		{"unlock factor", cfg.Security.LinkTOTP, "link"},
+		{"sealing factor", cfg.Security.SealTOTP, "seal"},
+	} {
+		if !f.t.Enabled {
+			fmt.Printf("[note] %s: off (enable it with `login config totp init %s`)\n", f.name, f.hint)
+			continue
+		}
+		if _, err := totp.LoadSecret(f.t.SecretFile); err != nil {
+			report(false, f.name, "on, but the secret cannot be used, so the server will not start: "+err.Error()+" (run `login config totp init "+f.hint+"`)")
+			continue
+		}
+		report(true, f.name, fmt.Sprintf("on, period %s, %d digits, secret present", f.t.Period, f.t.Digits))
+	}
 }

@@ -4,6 +4,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,7 +13,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/LeafAI/login/internal/seal"
 	"github.com/LeafAI/login/internal/site/generic"
+	"github.com/LeafAI/login/internal/totp"
 )
 
 type Config struct {
@@ -49,6 +52,81 @@ type Security struct {
 	// AllowedHosts, when non-empty, restricts which sites the agent may log in to. Entries are
 	// glob patterns matched against "host" and "host:port", e.g. "*.corp.example".
 	AllowedHosts []string `yaml:"allowed_hosts"`
+
+	// LinkTOTP is the unlock factor, a long-period TOTP: with it on, the site, the tunnel address and the one-shot
+	// password are encrypted in the DingTalk link and the person types its code in the page to read them. The default
+	// period is 10 minutes, the longest period that 1Password supports.
+	LinkTOTP TOTP `yaml:"link_totp"`
+	// SealTOTP is the sealing factor, a 30 second TOTP: the page seals what the person types with its code before
+	// anything leaves the browser, and the server opens it with the code it computes itself.
+	SealTOTP TOTP `yaml:"seal_totp"`
+}
+
+// TOTP configures one time-based code factor. Each factor has its own secret file, so one leak does not open both.
+type TOTP struct {
+	Enabled    bool          `yaml:"enabled"`
+	Period     time.Duration `yaml:"period"`
+	Digits     int           `yaml:"digits"`
+	SecretFile string        `yaml:"secret_file"` // 0600; created by `login config totp init`
+}
+
+// On reports whether the factor is switched on.
+func (t TOTP) On() bool { return t.Enabled }
+
+// Validate checks both factors.
+func (s Security) Validate() error {
+	for name, t := range map[string]TOTP{"link_totp": s.LinkTOTP, "seal_totp": s.SealTOTP} {
+		if !t.Enabled {
+			continue
+		}
+		if _, err := totp.ParseSettings(t.Period, t.Digits); err != nil {
+			return fmt.Errorf("security.%s: %w", name, err)
+		}
+	}
+	if s.LinkTOTP.Enabled && s.SealTOTP.Enabled && filepath.Clean(s.LinkTOTP.SecretFile) == filepath.Clean(s.SealTOTP.SecretFile) {
+		return fmt.Errorf("security: link_totp and seal_totp use the same secret file %s; give each its own, so that one leak does not open both", s.LinkTOTP.SecretFile)
+	}
+	return nil
+}
+
+// Sources loads the secrets of the factors that are switched on. A factor that is on but whose secret cannot be read
+// is an error: starting without it would silently drop the protection the person asked for.
+func (s Security) Sources() (link, seal *totp.Source, err error) {
+	load := func(name string, t TOTP) (*totp.Source, error) {
+		if !t.Enabled {
+			return nil, nil
+		}
+		st, err := totp.ParseSettings(t.Period, t.Digits)
+		if err != nil {
+			return nil, fmt.Errorf("security.%s: %w", name, err)
+		}
+		secret, err := totp.LoadSecret(t.SecretFile)
+		if err != nil {
+			return nil, fmt.Errorf("security.%s is on but its secret cannot be used (run `login config totp init`): %w", name, err)
+		}
+		return &totp.Source{Secret: secret, Settings: st}, nil
+	}
+	if link, err = load("link_totp", s.LinkTOTP); err != nil {
+		return nil, nil, err
+	}
+	if seal, err = load("seal_totp", s.SealTOTP); err != nil {
+		return nil, nil, err
+	}
+	return link, seal, nil
+}
+
+// Validate checks the settings that depend on one another.
+func (c *Config) Validate() error {
+	if err := c.Security.Validate(); err != nil {
+		return err
+	}
+	if t := c.Security.LinkTOTP; t.Enabled {
+		windows := int((c.Web.TTL+t.Period-1)/t.Period) + 1 // every window the link's life can touch
+		if windows > totp.MaxCandidates || windows > seal.MaxLinkSlots {
+			return fmt.Errorf("security.link_totp: a %s period over a link that lives %s touches %d windows, more than the %d the link can carry; use a longer period", t.Period, c.Web.TTL, windows, min(totp.MaxCandidates, seal.MaxLinkSlots))
+		}
+	}
+	return nil
 }
 
 // Audit controls the append-only activity log (JSON lines, metadata only, no secrets).
@@ -167,6 +245,18 @@ func (c *Config) applyEnv() {
 	}
 }
 
+func (t *TOTP) applyDefaults(period time.Duration, secretFile string) {
+	if t.Period == 0 {
+		t.Period = period
+	}
+	if t.Digits == 0 {
+		t.Digits = 8
+	}
+	if t.SecretFile == "" {
+		t.SecretFile = secretFile
+	}
+}
+
 func (c *Config) applyDefaults(dir string) {
 	if len(c.Tunnel.Order) == 0 {
 		c.Tunnel.Order = []string{"pinggy", "localhost.run", "serveo", "tunnl"}
@@ -192,6 +282,8 @@ func (c *Config) applyDefaults(dir string) {
 	if c.Web.TTL == 0 {
 		c.Web.TTL = 10 * time.Minute
 	}
+	c.Security.LinkTOTP.applyDefaults(10*time.Minute, filepath.Join(dir, "totp", "link.secret"))
+	c.Security.SealTOTP.applyDefaults(30*time.Second, filepath.Join(dir, "totp", "seal.secret"))
 	if c.Audit.File == "" {
 		c.Audit.File = filepath.Join(dir, "audit.jsonl")
 	}

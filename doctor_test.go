@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LeafAI/login/internal/totp"
 )
 
 // capture runs fn and returns what it printed to stdout.
@@ -81,5 +83,49 @@ func TestDoctorReportsAuditAndLimits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "audit.jsonl")); err != nil {
 		t.Errorf("the audit file should be creatable: %v", err)
+	}
+}
+
+func TestDoctorReportsTheTwoFactors(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "c.yaml")
+	os.WriteFile(cfgPath, []byte("security:\n  link_totp: {enabled: true}\n  seal_totp: {enabled: true}\n"), 0o600)
+	// secrets missing: doctor must say so, loudly, because the server will not start
+	out, code := capture(t, func() int { return runDoctor([]string{"-config", cfgPath}) })
+	if code == 0 || !strings.Contains(out, "[FAIL] unlock factor") || !strings.Contains(out, "[FAIL] sealing factor") {
+		t.Errorf("a factor that is on without its secret must fail the check (exit %d):\n%s", code, out)
+	}
+	if !strings.Contains(out, "totp init") {
+		t.Errorf("the failure should say how to fix it:\n%s", out)
+	}
+	// secrets present: both ok, with their settings but never a secret or a code
+	for _, name := range []string{"link", "seal"} {
+		s, _ := totp.NewSecret()
+		if err := totp.SaveSecret(filepath.Join(dir, "totp", name+".secret"), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, _ = capture(t, func() int { return runDoctor([]string{"-config", cfgPath}) })
+	for _, want := range []string{"[ok  ] unlock factor", "[ok  ] sealing factor", "10m0s", "30s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor lacks %q:\n%s", want, out)
+		}
+	}
+	for _, name := range []string{"link", "seal"} {
+		s, _ := totp.LoadSecret(filepath.Join(dir, "totp", name+".secret"))
+		if strings.Contains(out, totp.FormatSecret(s)) {
+			t.Errorf("doctor printed the %s secret", name)
+		}
+	}
+}
+
+func TestDoctorSaysNothingAboutFactorsThatAreOff(t *testing.T) {
+	dir := t.TempDir()
+	out, _ := capture(t, func() int { return runDoctor([]string{"-config", filepath.Join(dir, "c.yaml")}) })
+	if strings.Contains(out, "[FAIL] unlock") || strings.Contains(out, "[FAIL] sealing") {
+		t.Errorf("a factor that is off must not fail:\n%s", out)
+	}
+	if !strings.Contains(out, "unlock factor: off") || !strings.Contains(out, "sealing factor: off") {
+		t.Errorf("doctor should say that the factors are off:\n%s", out)
 	}
 }

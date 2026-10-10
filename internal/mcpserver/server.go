@@ -47,6 +47,8 @@ type Server struct {
 	log     func(string, ...any)
 	audit   *audit.Log
 	limiter *ratelimit.Limiter
+
+	linkTOTP, sealTOTP bool // which TOTP factors are on (reported by the policy resource; never their secrets)
 }
 
 // New builds the MCP server with all tools registered.
@@ -94,10 +96,27 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 			return nil, nil, err
 		}
 	}
+	// The factors are loaded before anything else can use them. A factor that is on but whose secret is missing stops
+	// the server: carrying on would hand out plain links to people who switched the protection on.
+	if err := cfg.Validate(); err != nil {
+		return nil, nil, err
+	}
+	linkSrc, sealSrc, err := cfg.Security.Sources()
+	if err != nil {
+		return nil, nil, err
+	}
+	s.linkTOTP, s.sealTOTP = linkSrc != nil, sealSrc != nil
+	var unlock, sealing flow.CodeSource
+	if linkSrc != nil {
+		unlock = linkSrc
+	}
+	if sealSrc != nil {
+		sealing = sealSrc
+	}
 	s.mgr = flow.NewManager(flow.Config{
 		Keys:     keyring.NewPool(cfg.Keys.Dir, cfg.Keys.MaxUses, cfg.Keys.MaxAge),
 		Notifier: s.notify, Tunnels: ts, PageURL: cfg.Web.PageURL, TTL: cfg.Web.TTL, Log: s.log,
-		Admit: s.admit, OnRound: s.onRound, OnTunnel: s.onTunnel,
+		Admit: s.admit, OnRound: s.onRound, OnTunnel: s.onTunnel, Unlock: unlock, Seal: sealing,
 	})
 	s.tracker = archery.NewTracker(cfg.Archery.DDLAllowed(), cfg.Archery.WaitTimeout)
 	s.tracker.Poll = cfg.Archery.PollInterval

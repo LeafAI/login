@@ -18,6 +18,7 @@ rediscover it.
 | Protecting people | per-site and overall request limits; cool-down after a Reject; `rate_limited` error |
 | MCP surface | output schemas and titles on every tool, resources `login://sites|sessions|policy`, server instructions |
 | Operations | `login version`, Dockerfile, CI build check, `login doctor` covers audit and limits |
+| Transport hardening | one-shot tunnels (checked before use, closed with their process tree); AES-256-GCM seal under a per-round password; optional unlock (long-period TOTP) and sealing (30 s TOTP) factors |
 
 ## Planned (tracked, not started)
 
