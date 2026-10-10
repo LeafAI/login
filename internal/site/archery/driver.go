@@ -88,7 +88,8 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 			return nil, fmt.Errorf("%w: invalid two-factor code: %s", site.ErrBadCredentials, site.Clip(v.Msg, 200))
 		}
 	}
-	s := &site.Session{Cookies: site.CookiesFrom(c, base), Headers: map[string]string{"X-CSRFToken": csrfOf(c, base)}}
+	s := &site.Session{Cookies: site.CookiesFrom(c, base), Headers: map[string]string{"X-CSRFToken": csrfOf(c, base)},
+		Tokens: map[string]string{"api": detectGeneration(ctx, base, c)}}
 	has := false
 	for _, ck := range s.Cookies {
 		has = has || ck.Name == "sessionid"
@@ -97,6 +98,20 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 		return nil, fmt.Errorf("%w: no sessionid cookie was issued", site.ErrLoginRejected)
 	}
 	return s, nil
+}
+
+// detectGeneration tells the newer REST API (has /api/v1/sqlquery/) from Archery 1.x (404 there).
+func detectGeneration(ctx context.Context, base *url.URL, c *http.Client) string {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/api/v1/sqlquery/instances/", nil)
+	resp, err := site.NoRedirect(c).Do(req)
+	if err != nil {
+		return GenLegacy
+	}
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		return GenREST
+	}
+	return GenLegacy
 }
 
 func postForm(ctx context.Context, c *http.Client, base *url.URL, path string, form url.Values) (*envelope, error) {
@@ -116,9 +131,14 @@ func postForm(ctx context.Context, c *http.Client, base *url.URL, path string, f
 	return &env, nil
 }
 
-// Probe calls an authenticated REST endpoint (403 when the session is gone).
+// Probe checks the session with an endpoint every logged-in user can call. Unauthenticated page requests
+// are redirected to /login/ by Archery's middleware, API requests answer 403.
 func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *http.Client) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/api/v1/sqlquery/instances/", nil)
+	path := "/group/user_all_instances/"
+	if s.Tokens["api"] == GenREST {
+		path = "/api/v1/sqlquery/instances/"
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+path, nil)
 	req.Header.Set("Cookie", site.CookieHeader(s.Cookies))
 	resp, err := site.NoRedirect(hc).Do(req)
 	if err != nil {

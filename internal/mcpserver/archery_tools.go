@@ -148,7 +148,7 @@ func (s *Server) archeryRunSQL(ctx context.Context, req *mcp.CallToolRequest, in
 	if in.Wait != nil && !*in.Wait {
 		return finishOutcome(sub), nil
 	}
-	return s.waitWorkflow(ctx, req, c, sub.AuditID, max, sub.Check)
+	return s.waitWorkflow(ctx, req, c, sub.WorkflowID, max, sub.Check)
 }
 
 func (s *Server) waitWorkflow(ctx context.Context, req *mcp.CallToolRequest, c *archery.Client, id int, max time.Duration, check []archery.CheckRow) (any, *ToolError) {
@@ -174,7 +174,7 @@ func (s *Server) archeryWait(ctx context.Context, req *mcp.CallToolRequest, in W
 	if pending != nil {
 		return pendingLogin(pending), nil
 	}
-	return s.waitWorkflow(ctx, req, c, in.AuditID, max, nil)
+	return s.waitWorkflow(ctx, req, c, in.WorkflowID, max, nil)
 }
 
 func (s *Server) archeryStatus(ctx context.Context, req *mcp.CallToolRequest, in StatusInput) (any, *ToolError) {
@@ -185,14 +185,14 @@ func (s *Server) archeryStatus(ctx context.Context, req *mcp.CallToolRequest, in
 	if pending != nil {
 		return pendingLogin(pending), nil
 	}
-	code, err := c.Status(ctx, in.AuditID)
+	code, err := c.Status(ctx, in.WorkflowID)
 	if err != nil {
 		return nil, archeryErr(err)
 	}
 	phase := archery.PhaseOf(code)
-	out := StatusOutput{AuditID: in.AuditID, Status: phase, StatusCode: code, WorkflowURL: strings.TrimRight(c.Base.String(), "/") + "/workflow/" + itoa(in.AuditID) + "/"}
+	out := StatusOutput{WorkflowID: in.WorkflowID, Status: phase, StatusCode: code, WorkflowURL: strings.TrimRight(c.Base.String(), "/") + "/detail/" + itoa(in.WorkflowID) + "/"}
 	if phase == archery.PhaseDone || phase == archery.PhaseFailed {
-		if out.Results, err = c.Results(ctx, in.AuditID); err != nil {
+		if out.Results, err = c.Results(ctx, in.WorkflowID); err != nil {
 			return nil, archeryErr(err)
 		}
 	}
@@ -207,14 +207,14 @@ func (s *Server) archeryCancel(ctx context.Context, req *mcp.CallToolRequest, in
 	if pending != nil {
 		return pendingLogin(pending), nil
 	}
-	code, err := c.Status(ctx, in.AuditID)
+	code, err := c.Status(ctx, in.WorkflowID)
 	if err != nil {
 		return nil, archeryErr(err)
 	}
 	if phase := archery.PhaseOf(code); phase == archery.PhaseExecuting || phase == archery.PhaseDone || phase == archery.PhaseFailed || phase == archery.PhaseAborted {
-		return nil, errf("invalid_argument", false, "workflow %d is already %s and cannot be cancelled", in.AuditID, phase)
+		return nil, errf("invalid_argument", false, "workflow %d is already %s and cannot be cancelled", in.WorkflowID, phase)
 	}
-	if err := c.Cancel(ctx, in.AuditID, in.Reason); err != nil {
+	if err := c.Cancel(ctx, in.WorkflowID, in.Reason); err != nil {
 		return nil, archeryErr(err)
 	}
 	return CancelOutput{Status: "aborted"}, nil

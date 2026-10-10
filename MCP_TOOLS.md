@@ -241,13 +241,20 @@ Refuses if already executing/executed (`invalid_argument`).
 - `archery_workflow_status` pages through the 200 most recent workflows visible to the user.
 - The Archery endpoints are exercised against a fake server only; see the README's verification section.
 
-## 14. Archery addressing (as implemented)
+## 14. Archery (as implemented)
 
-Archery operates on workflows by their **`audit_id`**, so every Archery tool uses `audit_id` (the run/submit
-output also carries Archery's own `workflow_id` for reference). `resource_group` is the group **name**;
-the instance must be writable in that group (Archery's `can_write` tag). A finished abort is reported as
-`rejected` (with `by` and the approver's reason, from the workflow log) or `aborted` (cancelled / approval
-timed out). `archery_run_sql` has no `schema` argument (Archery's submit API does not take one).
+Two Archery generations are supported and detected at login (the session records which one it found):
+**1.x** (verified against v1.12.0: `/query/`, `/execute/`, `/cancel/`, `/getWorkflowStatus/`, `/workflow/log/`,
+`POST /api/v1/workflow/` to submit) and the **newer REST API** (`/api/v1/sqlquery/…`,
+`/api/v1/sql-workflows/<audit_id>/…`, verified against master). Every Archery tool addresses a workflow by
+its **`workflow_id`** (the number in `/detail/<id>/`); the REST generation additionally reports an `audit_id`,
+which the server maps internally.
+
+`resource_group` is the group **name**; the instance must be writable in that group (Archery's `can_write`
+tag). An aborted workflow is reported as `rejected` (with `by` and the approver's reason, taken from the
+workflow log) or `aborted` (cancelled, or the approval timed out). `archery_run_sql` has no `schema` argument
+(Archery's submit API does not take one). On Archery 1.x, `/execute/` and `/cancel/` answer failures with an
+HTML page rather than an error status; the client turns those pages into `archery_error`.
 
 ## 15. Decisions on the earlier open points
 

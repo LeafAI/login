@@ -10,6 +10,11 @@ import (
 	"github.com/LeafAI/login/internal/site/archery/archerytest"
 )
 
+func forGenerations(t *testing.T, fn func(t *testing.T, legacy bool)) {
+	t.Run("v1.12", func(t *testing.T) { fn(t, true) })
+	t.Run("rest", func(t *testing.T) { fn(t, false) })
+}
+
 // loginArchery completes the (password-only) login round through the real page.
 func loginArchery(t *testing.T, e *env, fake *httptest.Server) {
 	t.Helper()
@@ -25,7 +30,11 @@ func loginArchery(t *testing.T, e *env, fake *httptest.Server) {
 }
 
 func TestArcheryToolsEndToEnd(t *testing.T) {
-	f := &archerytest.Fake{}
+	forGenerations(t, testArcheryToolsEndToEnd)
+}
+
+func testArcheryToolsEndToEnd(t *testing.T, legacy bool) {
+	f := &archerytest.Fake{Legacy: legacy}
 	arch := httptest.NewServer(f.Handler())
 	defer arch.Close()
 	e := setupWith(t, func(c *config.Config) {
@@ -50,37 +59,41 @@ func TestArcheryToolsEndToEnd(t *testing.T) {
 	// submit without waiting, approve as a human would in Archery, then wait -> executes once
 	run, isErr := e.call(t, "archery_run_sql", args(map[string]any{
 		"instance": "prod", "database": "d", "sql": "UPDATE t SET a=1", "title": "fix a", "wait": false}))
-	if isErr || run["status"] != "pending" || run["audit_id"] != float64(42) || run["next_tool"] != "archery_wait" {
+	if isErr || run["status"] != "pending" || run["workflow_id"] != float64(9) || run["next_tool"] != "archery_wait" {
 		t.Fatalf("run_sql: %v", run)
 	}
-	if !strings.Contains(e.rec.wait(t, 2), "/workflow/42/") {
+	if !strings.Contains(e.rec.wait(t, 2), "/detail/9/") {
 		t.Error("approver notification missing")
 	}
 	if wf, _ := f.Submitted["workflow"].(map[string]any); wf["group_id"] != float64(3) {
 		t.Errorf("default group not used: %v", f.Submitted)
 	}
-	w, _ := e.call(t, "archery_wait", args(map[string]any{"audit_id": 42, "max_block_seconds": 1}))
+	w, _ := e.call(t, "archery_wait", args(map[string]any{"workflow_id": 9, "max_block_seconds": 1}))
 	if w["status"] != "pending" || w["phase"] != "awaiting_approval" || f.Executed != 0 {
 		t.Fatalf("before approval: %v executed=%d", w, f.Executed)
 	}
 	f.Mu.Lock()
 	f.Status = "workflow_review_pass"
 	f.Mu.Unlock()
-	w, isErr = e.call(t, "archery_wait", args(map[string]any{"audit_id": 42, "max_block_seconds": 10}))
+	w, isErr = e.call(t, "archery_wait", args(map[string]any{"workflow_id": 9, "max_block_seconds": 10}))
 	if isErr || w["status"] != "done" || f.Executed != 1 {
 		t.Fatalf("after approval: %v executed=%d", w, f.Executed)
 	}
 	if res := w["results"].([]any); len(res) != 1 || res[0].(map[string]any)["affected_rows"] != float64(3) {
 		t.Errorf("results: %v", w["results"])
 	}
-	st, _ := e.call(t, "archery_workflow_status", args(map[string]any{"audit_id": 42}))
+	st, _ := e.call(t, "archery_workflow_status", args(map[string]any{"workflow_id": 9}))
 	if st["status"] != "done" {
 		t.Errorf("status: %v", st)
 	}
 }
 
 func TestArcheryDDLSwitchAndValidation(t *testing.T) {
-	arch := httptest.NewServer((&archerytest.Fake{}).Handler())
+	forGenerations(t, testArcheryDDLSwitchAndValidation)
+}
+
+func testArcheryDDLSwitchAndValidation(t *testing.T, legacy bool) {
+	arch := httptest.NewServer((&archerytest.Fake{Legacy: legacy}).Handler())
 	defer arch.Close()
 	off := false
 	e := setupWith(t, func(c *config.Config) { c.Archery.AllowDDL = &off; c.Archery.DefaultGroup = "dba" })
@@ -101,7 +114,11 @@ func TestArcheryDDLSwitchAndValidation(t *testing.T) {
 }
 
 func TestArcheryCancelAndRejectedReporting(t *testing.T) {
-	f := &archerytest.Fake{}
+	forGenerations(t, testArcheryCancelAndRejectedReporting)
+}
+
+func testArcheryCancelAndRejectedReporting(t *testing.T, legacy bool) {
+	f := &archerytest.Fake{Legacy: legacy}
 	arch := httptest.NewServer(f.Handler())
 	defer arch.Close()
 	e := setupWith(t, func(c *config.Config) { c.Archery.PollInterval = 20 * time.Millisecond; c.Archery.DefaultGroup = "dba" })
@@ -109,26 +126,26 @@ func TestArcheryCancelAndRejectedReporting(t *testing.T) {
 	args := func(m map[string]any) map[string]any { m["url"] = arch.URL; return m }
 
 	run, _ := e.call(t, "archery_run_sql", args(map[string]any{"instance": "prod", "database": "d", "sql": "UPDATE t SET a=1", "title": "x", "wait": false}))
-	if run["audit_id"] != float64(42) {
+	if run["workflow_id"] != float64(9) {
 		t.Fatalf("run: %v", run)
 	}
-	out, isErr := e.call(t, "archery_cancel", args(map[string]any{"audit_id": 42, "reason": "no longer needed"}))
+	out, isErr := e.call(t, "archery_cancel", args(map[string]any{"workflow_id": 9, "reason": "no longer needed"}))
 	if isErr || out["status"] != "aborted" || !f.Cancelled || f.CancelRemark != "no longer needed" {
 		t.Fatalf("cancel: %v cancelled=%v remark=%q", out, f.Cancelled, f.CancelRemark)
 	}
 	// A cancelled workflow cannot be cancelled again.
-	if out, isErr = e.call(t, "archery_cancel", args(map[string]any{"audit_id": 42})); !isErr || out["code"] != "invalid_argument" {
+	if out, isErr = e.call(t, "archery_cancel", args(map[string]any{"workflow_id": 9})); !isErr || out["code"] != "invalid_argument" {
 		t.Errorf("second cancel: %v", out)
 	}
 	// An approver's rejection is reported as such, with their reason.
 	f.Mu.Lock()
 	f.Status, f.LogOp, f.LogInfo = "workflow_abort", "审核不通过", "touches orders"
 	f.Mu.Unlock()
-	w, _ := e.call(t, "archery_wait", args(map[string]any{"audit_id": 42, "max_block_seconds": 5}))
+	w, _ := e.call(t, "archery_wait", args(map[string]any{"workflow_id": 9, "max_block_seconds": 5}))
 	if w["status"] != "rejected" || w["reason"] != "touches orders" {
 		t.Errorf("rejected: %v", w)
 	}
-	if out, isErr = e.call(t, "archery_workflow_status", args(map[string]any{"audit_id": 999})); !isErr || out["code"] != "workflow_not_found" {
+	if out, isErr = e.call(t, "archery_workflow_status", args(map[string]any{"workflow_id": 999})); !isErr || out["code"] != "workflow_not_found" {
 		t.Errorf("unknown workflow: %v", out)
 	}
 }

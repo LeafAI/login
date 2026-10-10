@@ -146,7 +146,7 @@ type RunSQLInput struct {
 
 type WaitInput struct {
 	ArcheryURL
-	AuditID         int `json:"audit_id" jsonschema:"The audit_id returned by archery_run_sql."`
+	WorkflowID      int `json:"workflow_id" jsonschema:"The workflow_id returned by archery_run_sql."`
 	MaxBlockSeconds int `json:"max_block_seconds,omitempty"`
 }
 
@@ -158,11 +158,11 @@ type ArcheryOut struct {
 
 type StatusInput struct {
 	ArcheryURL
-	AuditID int `json:"audit_id"`
+	WorkflowID int `json:"workflow_id"`
 }
 
 type StatusOutput struct {
-	AuditID     int                 `json:"audit_id"`
+	WorkflowID  int                 `json:"workflow_id"`
 	Status      string              `json:"status"`      // awaiting_approval | approved | executing | done | failed | aborted | check_failed
 	StatusCode  string              `json:"status_code"` // Archery's own workflow status
 	WorkflowURL string              `json:"workflow_url"`
@@ -171,8 +171,8 @@ type StatusOutput struct {
 
 type CancelInput struct {
 	ArcheryURL
-	AuditID int    `json:"audit_id"`
-	Reason  string `json:"reason,omitempty"`
+	WorkflowID int    `json:"workflow_id"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 type CancelOutput struct {

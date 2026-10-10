@@ -122,31 +122,38 @@ func toInstances(data json.RawMessage) ([]Instance, error) {
 	return out, nil
 }
 
-// Instances lists the instances the user may query.
-func (c *Client) Instances(ctx context.Context) ([]Instance, error) {
-	var env envelope
-	if err := c.call(ctx, "GET", "/api/v1/sqlquery/instances/", nil, &env); err != nil {
-		return nil, err
-	}
-	if err := c.legacy("/api/v1/sqlquery/instances/", &env); err != nil {
-		return nil, err
-	}
-	return toInstances(env.Data)
+// Generation names stored in Session.Tokens["api"].
+const (
+	GenLegacy = "legacy" // Archery 1.x ajax endpoints (e.g. v1.12.0)
+	GenREST   = "rest"   // newer Archery with /api/v1/sqlquery and /api/v1/sql-workflows
+)
+
+// backend implements the generation-specific operations. Workflow handles are Archery workflow ids.
+type backend interface {
+	instances(ctx context.Context) ([]Instance, error)
+	databases(ctx context.Context, instance string) ([]string, error)
+	query(ctx context.Context, q QueryRequest) (*QueryResult, error)
+	submit(ctx context.Context, r SubmitRequest, groupID, instanceID int) (*Submitted, error)
+	status(ctx context.Context, id int) (string, error)
+	execute(ctx context.Context, id int) error
+	cancel(ctx context.Context, id int, reason string) error
+	results(ctx context.Context, id int) ([]ResultRow, error)
+	logs(ctx context.Context, id int) ([]LogEntry, error)
 }
+
+func (c *Client) be() backend {
+	if c.Sess.Tokens["api"] == GenREST {
+		return &restBackend{c: c}
+	}
+	return &legacyBackend{c: c}
+}
+
+// Instances lists the instances the user may query.
+func (c *Client) Instances(ctx context.Context) ([]Instance, error) { return c.be().instances(ctx) }
 
 // Databases lists the databases of an instance.
 func (c *Client) Databases(ctx context.Context, instance string) ([]string, error) {
-	path := "/api/v1/sqlquery/resources/?resource_type=database&instance_name=" + url.QueryEscape(instance)
-	var env envelope
-	if err := c.call(ctx, "GET", path, nil, &env); err != nil {
-		return nil, err
-	}
-	if err := c.legacy(path, &env); err != nil {
-		return nil, err
-	}
-	var dbs []string
-	json.Unmarshal(env.Data, &dbs)
-	return dbs, nil
+	return c.be().databases(ctx, instance)
 }
 
 type QueryRequest struct {
@@ -176,34 +183,7 @@ func (c *Client) Query(ctx context.Context, q QueryRequest) (*QueryResult, error
 	if q.Limit <= 0 {
 		q.Limit = 100
 	}
-	var env envelope
-	const path = "/api/v1/sqlquery/execute/"
-	if err := c.call(ctx, "POST", path, map[string]any{
-		"instance_name": q.Instance, "db_name": q.Database, "schema_name": q.Schema, "tb_name": "",
-		"sql_content": q.SQL, "limit_num": q.Limit}, &env); err != nil {
-		return nil, err
-	}
-	if err := c.legacy(path, &env); err != nil {
-		return nil, err
-	}
-	var d struct {
-		Columns   []string `json:"column_list"`
-		Rows      [][]any  `json:"rows"`
-		QueryTime float64  `json:"query_time"`
-		MaskHit   bool     `json:"mask_rule_hit"`
-	}
-	if err := json.Unmarshal(env.Data, &d); err != nil {
-		return nil, &APIError{path, "unexpected data: " + err.Error()}
-	}
-	r := &QueryResult{Columns: d.Columns, Rows: d.Rows, RowCount: len(d.Rows), CostMS: int64(d.QueryTime * 1000),
-		Truncated: len(d.Rows) >= q.Limit}
-	if d.MaskHit {
-		r.Warnings = append(r.Warnings, "some columns were masked by Archery")
-	}
-	if env.Msg != "" && env.Msg != "ok" {
-		r.Warnings = append(r.Warnings, env.Msg)
-	}
-	return r, nil
+	return c.be().query(ctx, q)
 }
 
 type Group struct {
@@ -241,4 +221,29 @@ func (c *Client) GroupInstances(ctx context.Context, group string) ([]Instance, 
 		return nil, err
 	}
 	return toInstances(env.Data)
+}
+
+// queryResult converts the {status,msg,data} answer of Archery's query endpoints (both generations).
+func queryResult(path string, env *envelope, limit int, c *Client) (*QueryResult, error) {
+	if err := c.legacy(path, env); err != nil {
+		return nil, err
+	}
+	var d struct {
+		Columns   []string `json:"column_list"`
+		Rows      [][]any  `json:"rows"`
+		QueryTime float64  `json:"query_time"`
+		MaskHit   bool     `json:"mask_rule_hit"`
+	}
+	if err := json.Unmarshal(env.Data, &d); err != nil {
+		return nil, &APIError{path, "unexpected data: " + err.Error()}
+	}
+	r := &QueryResult{Columns: d.Columns, Rows: d.Rows, RowCount: len(d.Rows), CostMS: int64(d.QueryTime * 1000),
+		Truncated: len(d.Rows) >= limit}
+	if d.MaskHit {
+		r.Warnings = append(r.Warnings, "some columns were masked by Archery")
+	}
+	if env.Msg != "" && env.Msg != "ok" {
+		r.Warnings = append(r.Warnings, env.Msg)
+	}
+	return r, nil
 }

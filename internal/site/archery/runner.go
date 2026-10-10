@@ -36,12 +36,12 @@ type Notifier interface {
 	Markdown(ctx context.Context, title, text string) error
 }
 
-// Outcome is what run/wait return. AuditID is Archery's handle for every workflow operation.
+// Outcome is what run/wait return. WorkflowID is Archery's handle for every workflow operation.
 type Outcome struct {
 	Status      string      `json:"status"` // done | failed | pending | aborted | rejected
 	Phase       string      `json:"phase,omitempty"`
-	AuditID     int         `json:"audit_id"`
-	WorkflowID  int         `json:"workflow_id,omitempty"`
+	WorkflowID  int         `json:"workflow_id"`
+	AuditID     int         `json:"audit_id,omitempty"` // newer Archery only
 	WorkflowURL string      `json:"workflow_url"`
 	Check       []CheckRow  `json:"check,omitempty"`
 	Results     []ResultRow `json:"results,omitempty"`
@@ -141,16 +141,16 @@ func (t *Tracker) Submit(ctx context.Context, c *Client, n Notifier, r SubmitReq
 	if err != nil {
 		return nil, err
 	}
-	tr := t.get(c.Base, sub.AuditID)
+	tr := t.get(c.Base, sub.WorkflowID)
 	if approvalTimeout > 0 {
 		tr.deadline = time.Now().Add(approvalTimeout)
 	}
-	out := &Outcome{Status: "pending", Phase: PhaseAwaitingApproval, AuditID: sub.AuditID, WorkflowID: sub.WorkflowID,
-		WorkflowURL: workflowURL(c.Base, sub.AuditID), Check: rows}
+	out := &Outcome{Status: "pending", Phase: PhaseAwaitingApproval, WorkflowID: sub.WorkflowID, AuditID: sub.AuditID,
+		WorkflowURL: workflowURL(c.Base, sub.WorkflowID), Check: rows}
 	if n != nil {
 		text := fmt.Sprintf("### SQL approval needed: %s\n\n- **Instance / DB**: %s / %s\n- **Requested by AI agent**: %s\n\n```sql\n%s\n```\n\n[Open workflow #%d in Archery](%s)\n\nAfter approval the SQL is executed automatically.",
 			notify.Escape(r.Title, 50), notify.Escape(r.Instance, 80), notify.Escape(r.Database, 80), orNone(notify.Escape(r.Remark, 200)),
-			notify.CodeBlock(r.SQL, 500), sub.AuditID, out.WorkflowURL)
+			notify.CodeBlock(r.SQL, 500), sub.WorkflowID, out.WorkflowURL)
 		if err := n.Markdown(ctx, "SQL approval: "+notify.Escape(r.Title, 50), text); err != nil {
 			out.Reason = "workflow submitted but the DingTalk notification failed: " + err.Error()
 		}
@@ -166,13 +166,13 @@ func orNone(s string) string {
 }
 
 // Wait advances the workflow (executing it once when approved) until it ends or maxBlock elapses.
-func (t *Tracker) Wait(ctx context.Context, c *Client, auditID int, maxBlock time.Duration, progress func(phase string)) (*Outcome, error) {
-	tr := t.get(c.Base, auditID)
+func (t *Tracker) Wait(ctx context.Context, c *Client, id int, maxBlock time.Duration, progress func(phase string)) (*Outcome, error) {
+	tr := t.get(c.Base, id)
 	deadline := time.Now().Add(maxBlock)
-	out := &Outcome{AuditID: auditID, WorkflowURL: workflowURL(c.Base, auditID)}
+	out := &Outcome{WorkflowID: id, WorkflowURL: workflowURL(c.Base, id)}
 	last := ""
 	for {
-		code, err := c.Status(ctx, auditID)
+		code, err := c.Status(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -188,7 +188,7 @@ func (t *Tracker) Wait(ctx context.Context, c *Client, auditID int, maxBlock tim
 		case PhaseApproved:
 			tr.mu.Lock()
 			if !tr.executed {
-				if err := c.Execute(ctx, auditID); err != nil {
+				if err := c.Execute(ctx, id); err != nil {
 					tr.mu.Unlock()
 					return nil, err
 				}
@@ -196,7 +196,7 @@ func (t *Tracker) Wait(ctx context.Context, c *Client, auditID int, maxBlock tim
 			}
 			tr.mu.Unlock()
 		case PhaseDone, PhaseFailed:
-			res, err := c.Results(ctx, auditID)
+			res, err := c.Results(ctx, id)
 			if err != nil {
 				return nil, err
 			}
@@ -212,7 +212,7 @@ func (t *Tracker) Wait(ctx context.Context, c *Client, auditID int, maxBlock tim
 			}
 			return out, nil
 		case PhaseAborted:
-			t.describeAbort(ctx, c, auditID, out)
+			t.describeAbort(ctx, c, id, out)
 			return out, nil
 		case PhaseCheckFailed:
 			out.Status = "failed"
@@ -220,7 +220,7 @@ func (t *Tracker) Wait(ctx context.Context, c *Client, auditID int, maxBlock tim
 			return out, nil
 		case PhaseAwaitingApproval:
 			if time.Now().After(tr.deadline) {
-				_ = c.Cancel(ctx, auditID, "approval timed out (requested by AI agent)")
+				_ = c.Cancel(ctx, id, "approval timed out (requested by AI agent)")
 				out.Status, out.Phase = "aborted", PhaseAborted
 				out.Reason = "nobody approved in time; the workflow was cancelled"
 				return out, nil
@@ -240,10 +240,10 @@ func (t *Tracker) Wait(ctx context.Context, c *Client, auditID int, maxBlock tim
 
 // describeAbort distinguishes a rejection from a cancellation using the workflow log
 // (Archery sets the same status for both) and extracts who did it and why.
-func (t *Tracker) describeAbort(ctx context.Context, c *Client, auditID int, out *Outcome) {
+func (t *Tracker) describeAbort(ctx context.Context, c *Client, id int, out *Outcome) {
 	out.Status = "aborted"
 	out.Reason = "the workflow was cancelled in Archery"
-	logs, err := c.Logs(ctx, auditID)
+	logs, err := c.Logs(ctx, id)
 	if err != nil || len(logs) == 0 {
 		return
 	}

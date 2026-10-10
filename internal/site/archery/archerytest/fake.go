@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	AuditID    = 42
+	AuditID    = 42 // REST generation only
 	WorkflowID = 9
 	csrfBefore = "CSRF"  // issued by /login/
 	csrfAfter  = "CSRF2" // Django rotates the CSRF token when the user logs in
@@ -19,6 +19,9 @@ const (
 
 // Fake is an in-memory imitation of the Archery endpoints used by the client.
 type Fake struct {
+	// Legacy imitates Archery 1.x (v1.12.0): ajax endpoints, workflow_id handles, redirects and HTML
+	// error pages. Otherwise the newer REST API (/api/v1/sqlquery, /api/v1/sql-workflows) is served.
+	Legacy       bool
 	Mu           sync.Mutex
 	TwoFA        bool
 	Verified     bool
@@ -45,6 +48,10 @@ func (f *Fake) Handler() http.Handler {
 	authed := func(w http.ResponseWriter, r *http.Request) bool {
 		c, err := r.Cookie("sessionid")
 		if err != nil || c.Value != "S" {
+			if !strings.HasPrefix(r.URL.Path, "/api/v1/") { // Archery's CheckLoginMiddleware
+				http.Redirect(w, r, "/login/", 302)
+				return false
+			}
 			out(w, 403, map[string]string{"detail": "Authentication credentials were not provided."})
 			return false
 		}
@@ -95,11 +102,19 @@ func (f *Fake) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("/api/v1/sqlquery/instances/", func(w http.ResponseWriter, r *http.Request) {
+		if f.Legacy {
+			http.NotFound(w, r)
+			return
+		}
 		if authed(w, r) {
 			out(w, 200, map[string]any{"status": 0, "msg": "ok", "data": []map[string]any{{"id": 7, "type": "master", "db_type": "mysql", "instance_name": "prod"}}})
 		}
 	})
 	mux.HandleFunc("/api/v1/sqlquery/resources/", func(w http.ResponseWriter, r *http.Request) {
+		if f.Legacy {
+			http.NotFound(w, r)
+			return
+		}
 		if !authed(w, r) {
 			return
 		}
@@ -110,6 +125,10 @@ func (f *Fake) Handler() http.Handler {
 		out(w, 200, map[string]any{"status": 0, "msg": "ok", "data": []string{"d", "orders"}})
 	})
 	mux.HandleFunc("/api/v1/sqlquery/execute/", func(w http.ResponseWriter, r *http.Request) {
+		if f.Legacy {
+			http.NotFound(w, r)
+			return
+		}
 		if !authed(w, r) {
 			return
 		}
@@ -154,10 +173,18 @@ func (f *Fake) Handler() http.Handler {
 		out(w, 200, map[string]any{"error_count": lvl / 2, "rows": []map[string]any{{"id": 1, "errlevel": lvl, "errormessage": msg, "sql": "x"}}})
 	})
 	mux.HandleFunc("/api/v1/sql-workflows/", func(w http.ResponseWriter, r *http.Request) {
+		if f.Legacy {
+			http.NotFound(w, r)
+			return
+		}
 		if !authed(w, r) {
 			return
 		}
 		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/sql-workflows/"), "/")
+		if path == "list" {
+			out(w, 200, map[string]any{"total": 1, "rows": []map[string]any{{"id": WorkflowID, "workflow_id": WorkflowID, "audit_id": AuditID, "status": f.Status}}})
+			return
+		}
 		if path == "" && r.Method == http.MethodPost {
 			b := body(r)
 			wf, _ := b["workflow"].(map[string]any)
@@ -210,5 +237,142 @@ func (f *Fake) Handler() http.Handler {
 			out(w, 404, map[string]string{"detail": "not found"})
 		}
 	})
+
+	// ---- Archery 1.x (v1.12.0) endpoints ----
+	legacyOnly := func(h func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !f.Legacy {
+				http.NotFound(w, r)
+				return
+			}
+			h(w, r)
+		}
+	}
+	mux.HandleFunc("/group/user_all_instances/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if authed(w, r) {
+			out(w, 200, map[string]any{"status": 0, "msg": "ok", "data": []map[string]any{{"id": 7, "type": "master", "db_type": "mysql", "instance_name": "prod"}}})
+		}
+	}))
+	mux.HandleFunc("/instance/instance_resource/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		if r.URL.Query().Get("resource_type") != "database" || r.URL.Query().Get("instance_name") != "prod" {
+			out(w, 200, map[string]any{"status": 1, "msg": "bad query", "data": []string{}})
+			return
+		}
+		out(w, 200, map[string]any{"status": 0, "msg": "ok", "data": []string{"d", "orders"}})
+	}))
+	mux.HandleFunc("/query/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		r.ParseForm()
+		if r.PostForm.Get("instance_name") != "prod" || r.PostForm.Get("sql_content") == "" {
+			out(w, 200, map[string]any{"status": 1, "msg": "页面提交参数可能为空", "data": map[string]any{}})
+			return
+		}
+		out(w, 200, map[string]any{"status": 0, "msg": "ok", "data": map[string]any{
+			"column_list": []string{"id", "name"}, "rows": [][]any{{1, "a"}, {2, "b"}}, "query_time": 0.012, "affected_rows": 2}})
+	}))
+	// submit: JSON POST /api/v1/workflow/ answers the serialized SqlWorkflowContent
+	mux.HandleFunc("/api/v1/workflow/", func(w http.ResponseWriter, r *http.Request) {
+		if !f.Legacy || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if !authed(w, r) {
+			return
+		}
+		b := body(r)
+		wf, _ := b["workflow"].(map[string]any)
+		if wf == nil || wf["group_id"] != float64(3) || wf["instance"] != float64(7) || b["sql_content"] == nil {
+			out(w, 400, map[string]any{"errors": "bad payload"})
+			return
+		}
+		f.Mu.Lock()
+		f.Submitted = b
+		f.Status = "workflow_manreviewing"
+		f.Mu.Unlock()
+		out(w, 201, map[string]any{"id": 1, "workflow_id": WorkflowID, "workflow": map[string]any{"id": WorkflowID}, "sql_content": b["sql_content"]})
+	})
+	mux.HandleFunc("/getWorkflowStatus/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		r.ParseForm()
+		if r.PostForm.Get("workflow_id") != "9" {
+			http.NotFound(w, r)
+			return
+		}
+		f.Mu.Lock()
+		defer f.Mu.Unlock()
+		out(w, 200, map[string]any{"status": f.Status, "msg": "", "data": ""})
+	}))
+	htmlError := func(w http.ResponseWriter, msg string) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html><body><div class=\"alert\">" + msg + "</div></body></html>"))
+	}
+	mux.HandleFunc("/execute/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		r.ParseForm()
+		f.Mu.Lock()
+		defer f.Mu.Unlock()
+		if r.PostForm.Get("workflow_id") != "9" || r.PostForm.Get("mode") != "auto" {
+			htmlError(w, "workflow_id参数为空")
+			return
+		}
+		if f.Status != "workflow_review_pass" && f.Status != "workflow_timingtask" {
+			htmlError(w, "你无权执行当前工单！")
+			return
+		}
+		f.Executed++
+		f.Status = "workflow_finish"
+		http.Redirect(w, r, "/detail/9/", 302)
+	}))
+	mux.HandleFunc("/cancel/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		r.ParseForm()
+		remark := r.PostForm.Get("cancel_remark")
+		f.Mu.Lock()
+		defer f.Mu.Unlock()
+		if r.PostForm.Get("workflow_id") != "9" || strings.TrimSpace(remark) == "" {
+			htmlError(w, "终止原因不能为空")
+			return
+		}
+		f.Cancelled, f.CancelRemark, f.Status = true, remark, "workflow_abort"
+		http.Redirect(w, r, "/detail/9/", 302)
+	}))
+	mux.HandleFunc("/sqlworkflow/detail_content/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		if r.URL.Query().Get("workflow_id") != "9" {
+			http.NotFound(w, r)
+			return
+		}
+		out(w, 200, map[string]any{"rows": []map[string]any{{"id": 1, "errlevel": 0, "sql": "UPDATE t SET a=1", "affected_rows": 3, "execute_time": "0.008", "backup_dbname": ""}}})
+	}))
+	mux.HandleFunc("/workflow/log/", legacyOnly(func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		r.ParseForm()
+		if r.PostForm.Get("workflow_id") != "9" || r.PostForm.Get("workflow_type") != "2" {
+			out(w, 200, map[string]any{"total": 0, "rows": []any{}})
+			return
+		}
+		f.Mu.Lock()
+		defer f.Mu.Unlock()
+		rows := []map[string]any{{"operation_type_desc": "提交", "operation_info": "", "operator_display": "alice", "operation_time": "2026-01-01T00:00:00"}}
+		if f.LogOp != "" {
+			rows = append([]map[string]any{{"operation_type_desc": f.LogOp, "operation_info": f.LogInfo, "operator_display": "lisi", "operation_time": "2026-01-01T00:05:00"}}, rows...)
+		}
+		out(w, 200, map[string]any{"total": len(rows), "rows": rows})
+	}))
 	return mux
 }
