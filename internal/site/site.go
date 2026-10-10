@@ -67,6 +67,13 @@ func Register(d Driver) {
 	registry[d.Name()] = d
 }
 
+// Replace registers d, replacing any driver with the same name (used for config-defined sites).
+func Replace(d Driver) {
+	mu.Lock()
+	defer mu.Unlock()
+	registry[d.Name()] = d
+}
+
 // Resolve picks a driver by explicit name, or by matching the URL.
 func Resolve(name string, u *url.URL) (Driver, error) {
 	mu.RLock()

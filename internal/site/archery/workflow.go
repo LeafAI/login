@@ -140,31 +140,41 @@ type Workflow struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// Status looks a workflow up in Archery's workflow list (titleHint narrows the server-side search).
+// Status looks a workflow up in Archery's workflow list, paging through at most 200 recent workflows
+// (titleHint narrows the server-side search when known).
 func (c *Client) Status(ctx context.Context, id int, titleHint string) (*Workflow, error) {
-	resp, raw, err := c.do(ctx, "POST", "/sqlworkflow_list/", url.Values{
-		"limit": {"50"}, "offset": {"0"}, "navStatus": {""}, "search": {titleHint}}, false)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("archery session is no longer valid (sqlworkflow_list -> %d)", resp.StatusCode)
-	}
-	// The list endpoint answers {"total":N,"rows":[...]}; tolerate the {status,data:{rows}} envelope too.
-	var body struct {
-		Rows []map[string]any `json:"rows"`
-		Data struct {
+	const page = 50
+	for offset := 0; offset < 4*page; offset += page {
+		resp, raw, err := c.do(ctx, "POST", "/sqlworkflow_list/", url.Values{
+			"limit": {strconv.Itoa(page)}, "offset": {strconv.Itoa(offset)}, "navStatus": {""}, "search": {titleHint}}, false)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("archery session is no longer valid (sqlworkflow_list -> %d)", resp.StatusCode)
+		}
+		// The list endpoint answers {"total":N,"rows":[...]}; tolerate the {status,data:{rows}} envelope too.
+		var body struct {
 			Rows []map[string]any `json:"rows"`
-		} `json:"data"`
+			Data struct {
+				Rows []map[string]any `json:"rows"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(raw), &body); err != nil {
+			return nil, fmt.Errorf("archery sqlworkflow_list: unexpected response: %s", truncate(raw, 160))
+		}
+		rows := body.Rows
+		if len(rows) == 0 {
+			rows = body.Data.Rows
+		}
+		if w, err := pick(rows, id); err == nil {
+			return w, nil
+		}
+		if len(rows) < page {
+			break
+		}
 	}
-	if err := json.Unmarshal([]byte(raw), &body); err != nil {
-		return nil, fmt.Errorf("archery sqlworkflow_list: unexpected response: %s", truncate(raw, 160))
-	}
-	rows := body.Rows
-	if len(rows) == 0 {
-		rows = body.Data.Rows
-	}
-	return pick(rows, id)
+	return nil, fmt.Errorf("%w: %d (not visible to this user?)", ErrNotFound, id)
 }
 
 func pick(rows []map[string]any, id int) (*Workflow, error) {

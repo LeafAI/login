@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/LeafAI/login/internal/site/generic"
 )
 
 type Config struct {
@@ -16,13 +18,21 @@ type Config struct {
 	Tunnel   Tunnel   `yaml:"tunnel"`
 	Keys     Keys     `yaml:"keys"`
 	Web      Web      `yaml:"web"`
-	Sessions Sessions `yaml:"sessions"`
+	MCP      MCP      `yaml:"mcp"`
 	Archery  Archery  `yaml:"archery"`
+	// Sites defines extra websites with the declarative generic driver.
+	Sites []generic.Spec `yaml:"sites"`
+}
+
+type MCP struct {
+	// MaxBlockSeconds is how long blocking tools wait before returning a "pending" result.
+	MaxBlockSeconds int `yaml:"max_block_seconds"`
 }
 
 type DingTalk struct {
 	Webhook string   `yaml:"webhook"`
 	Secret  string   `yaml:"secret"`
+	Keyword string   `yaml:"keyword"` // required keyword of the robot's security settings, if any
 	Mobiles []string `yaml:"at_mobiles"`
 }
 
@@ -50,13 +60,11 @@ type Web struct {
 	TTL     time.Duration `yaml:"ttl"`
 }
 
-type Sessions struct {
-	Persist bool `yaml:"persist"`
-}
-
 type Archery struct {
-	AllowDDL    *bool         `yaml:"allow_ddl"`
-	WaitTimeout time.Duration `yaml:"wait_timeout"`
+	AllowDDL     *bool         `yaml:"allow_ddl"`
+	WaitTimeout  time.Duration `yaml:"wait_timeout"`  // default approval timeout
+	DefaultGroup string        `yaml:"default_group"` // resource group used when the tool call gives none
+	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
 // DDLAllowed reports whether DDL statements may be submitted (default true).
@@ -120,6 +128,12 @@ func (c *Config) applyDefaults(dir string) {
 	}
 	if c.Web.TTL == 0 {
 		c.Web.TTL = 10 * time.Minute
+	}
+	if c.MCP.MaxBlockSeconds == 0 {
+		c.MCP.MaxBlockSeconds = 50
+	}
+	if c.Archery.PollInterval == 0 {
+		c.Archery.PollInterval = 5 * time.Second
 	}
 	if c.Archery.WaitTimeout == 0 {
 		c.Archery.WaitTimeout = 30 * time.Minute
