@@ -49,7 +49,7 @@ func (c *Cache) persist(fn func(map[string]record)) {
 }
 
 // Key returns the cache key (scheme://host[:port]) for a URL.
-func Key(u *url.URL) string { return u.Scheme + "://" + u.Host }
+func Key(u *url.URL) string { return site.Key(u) }
 
 func (c *Cache) Put(u *url.URL, d site.Driver, s *site.Session) {
 	c.mu.Lock()

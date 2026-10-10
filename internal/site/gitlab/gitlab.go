@@ -1,4 +1,9 @@
 // Package gitlab logs in to GitLab through the sign-in form (with optional TOTP 2FA).
+//
+// Two page generations are handled, both verified against the GitLab source: the classic server-rendered
+// forms (inputs named user[login], user[password], user[otp_attempt]) and current GitLab, whose sign-in and
+// 2FA steps are Vue components (the 2FA page only carries <div id="js-2fa" data-totp-enabled=...>). Both post
+// the same fields to /users/sign_in; the CSRF token comes from a hidden input or the csrf-token meta tag.
 package gitlab
 
 import (
@@ -62,7 +67,10 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 		return nil, err
 	}
 
-	if strings.Contains(body, `name="user[otp_attempt]"`) { // 2FA required
+	if isTwoFactorPage(body) { // 2FA required
+		if !totpAvailable(body) {
+			return nil, fmt.Errorf("%w: this account's second factor is WebAuthn/passkey or email only, which is not supported (TOTP is not enabled)", site.ErrLoginRejected)
+		}
 		code, err := ask.Ask(ctx, "totp", site.TOTPFields)
 		if err != nil {
 			return nil, err
@@ -71,17 +79,16 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 			"authenticity_token": {csrf(body)},
 			"user[otp_attempt]":  {strings.TrimSpace(code["code"])},
 			"user[remember_me]":  {"0"},
+			"two_factor_method":  {"totp"},
 		})
 		if err != nil {
 			return nil, err
 		}
-		if strings.Contains(body, `name="user[otp_attempt]"`) {
+		if isTwoFactorPage(body) {
 			return nil, fmt.Errorf("%w: invalid two-factor code", site.ErrBadCredentials)
 		}
 	}
 	switch {
-	case strings.Contains(body, "webauthn") && strings.Contains(finalPath, "sign_in"):
-		return nil, fmt.Errorf("%w: this account requires a WebAuthn/U2F device, which is not supported", site.ErrLoginRejected)
 	case strings.HasPrefix(finalPath, "/users/sign_in") || strings.Contains(body, `name="user[password]"`):
 		return nil, fmt.Errorf("%w: invalid login or password", site.ErrBadCredentials)
 	}
@@ -90,6 +97,24 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 		return nil, fmt.Errorf("%w: no session cookie was issued", site.ErrLoginRejected)
 	}
 	return s, nil
+}
+
+var (
+	js2fa       = regexp.MustCompile(`id=["']js-2fa["']`)
+	totpEnabled = regexp.MustCompile(`data-totp-enabled=["'](true|false)["']`)
+)
+
+// isTwoFactorPage recognises both the classic form and the Vue mount point of the 2FA step.
+func isTwoFactorPage(body string) bool {
+	return strings.Contains(body, `name="user[otp_attempt]"`) || js2fa.MatchString(body)
+}
+
+// totpAvailable is false only when the modern page explicitly says TOTP is not enabled for the account.
+func totpAvailable(body string) bool {
+	if m := totpEnabled.FindStringSubmatch(body); m != nil {
+		return m[1] == "true"
+	}
+	return true
 }
 
 func hasCookie(s *site.Session, name string) bool {

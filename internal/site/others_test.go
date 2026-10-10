@@ -32,19 +32,29 @@ func answers(code string) *sitetest.Asker {
 		"login": {"username": "alice", "password": "pw"}, "totp": {"code": code}}}
 }
 
-func TestKibana(t *testing.T) {
-	needOTP := true
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func kibanaFake(provider string, needOTP bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/internal/security/login_state":
+			json.NewEncoder(w).Encode(map[string]any{"selector": map[string]any{"enabled": false, "providers": []map[string]any{
+				{"type": "saml", "name": "saml1", "usesLoginForm": false},
+				{"type": "basic", "name": provider, "usesLoginForm": true}}}})
 		case "/internal/security/login":
 			if r.Header.Get("kbn-xsrf") == "" {
 				http.Error(w, "xsrf", 400)
 				return
 			}
 			var b struct {
-				Params map[string]string `json:"params"`
+				ProviderType string            `json:"providerType"`
+				ProviderName string            `json:"providerName"`
+				Params       map[string]string `json:"params"`
 			}
 			json.NewDecoder(r.Body).Decode(&b)
+			if b.ProviderType != "basic" || b.ProviderName != provider {
+				w.WriteHeader(401)
+				w.Write([]byte(`{"message":"unknown provider"}`))
+				return
+			}
 			if b.Params["username"] != "alice" || b.Params["password"] != "pw" {
 				w.WriteHeader(401)
 				w.Write([]byte(`{"message":"Unauthorized"}`))
@@ -63,8 +73,14 @@ func TestKibana(t *testing.T) {
 				return
 			}
 			w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
 		}
-	}))
+	})
+}
+
+func TestKibana(t *testing.T) {
+	srv := httptest.NewServer(kibanaFake("basic1", true)) // a custom provider name, as many clusters use
 	defer srv.Close()
 	a := answers("123456")
 	s, err := run(t, "kibana", srv, a)
@@ -75,14 +91,30 @@ func TestKibana(t *testing.T) {
 	if err := d.Probe(context.Background(), mustURL(srv.URL), s, srv.Client()); err != nil {
 		t.Errorf("probe: %v", err)
 	}
-	needOTP = false
+	plain := httptest.NewServer(kibanaFake("basic", false))
+	defer plain.Close()
 	a = answers("")
-	if _, err := run(t, "kibana", srv, a); err != nil || len(a.Asked) != 1 {
+	if _, err := run(t, "kibana", plain, a); err != nil || len(a.Asked) != 1 {
 		t.Errorf("no-2fa: %v %v", err, a.Asked)
 	}
 	bad := &sitetest.Asker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "x"}}}
-	if _, err := run(t, "kibana", srv, bad); !errors.Is(err, site.ErrBadCredentials) {
+	if _, err := run(t, "kibana", plain, bad); !errors.Is(err, site.ErrBadCredentials) {
 		t.Errorf("bad creds: %v", err)
+	}
+}
+
+// Kibana served under a path prefix (server.basePath) must work when the base URL carries the prefix.
+func TestKibanaUnderPathPrefix(t *testing.T) {
+	srv := httptest.NewServer(http.StripPrefix("/kibana", kibanaFake("basic", false)))
+	defer srv.Close()
+	base := mustURL(srv.URL + "/kibana")
+	d, _ := site.Resolve("kibana", base)
+	s, err := d.Login(context.Background(), base, answers(""), srv.Client())
+	if err != nil {
+		t.Fatalf("login under /kibana: %v", err)
+	}
+	if err := d.Probe(context.Background(), base, s, srv.Client()); err != nil {
+		t.Errorf("probe under /kibana: %v", err)
 	}
 }
 

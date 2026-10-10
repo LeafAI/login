@@ -75,6 +75,8 @@ archery:
   wait_timeout: 30m          # default approval timeout
 security:
   allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
+roots:                       # sites served under a path prefix: host -> full base URL
+  elk.corp.example: https://elk.corp.example/kibana
 aliases:                     # hostnames that do not hint at the product
   es.corp.example: kibana
   apm.corp.example: skywalking
@@ -119,6 +121,8 @@ of both generations, then exercised against fake servers that reproduce those co
 error pages).
 
 **Not verified against live systems:** the real SSH provider services (use `login doctor -tunnel`), a real DingTalk robot, and the live
-GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. **Nightingale** (v7) was checked against its source: login payload, the optional math-image captcha (shown to
-the human inside the login step) and optional RSA password encryption. **Kibana** and **KubeSphere** have no
+GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. **GitLab** was checked against the GitLab source for both page generations (classic server-rendered forms and
+current GitLab's Vue sign-in and 2FA steps). **Kibana**'s login route and provider discovery were checked against
+its source. **Nightingale** (v7) was checked against its source: login payload, the optional math-image captcha (shown to
+the human inside the login step) and optional RSA password encryption. **KubeSphere** (not yet source-checked) and Kibana have no
 TOTP in stock form; their OTP retry path is a guess for custom setups and has never run against a real one.

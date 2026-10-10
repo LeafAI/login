@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -68,6 +69,9 @@ func Register(d Driver) {
 	}
 	registry[d.Name()] = d
 }
+
+// Key identifies a site instance: scheme://host[:port] plus its path prefix, if any.
+func Key(u *url.URL) string { return u.Scheme + "://" + u.Host + strings.TrimRight(u.Path, "/") }
 
 // Replace registers d, replacing any driver with the same name (used for config-defined sites).
 func Replace(d Driver) {

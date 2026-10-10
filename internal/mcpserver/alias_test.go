@@ -89,3 +89,26 @@ func TestPersistentSessionsSurviveRestart(t *testing.T) {
 		t.Fatalf("restart: %+v %v", out, terr)
 	}
 }
+
+// A site served under a path prefix only works when `roots:` supplies the prefix, because the URL given by
+// the agent is reduced to scheme://host.
+func TestRootsSupplyPathPrefix(t *testing.T) {
+	ts := httptest.NewServer(http.StripPrefix("/sky", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })))
+	defer ts.Close()
+	cfg, _ := config.Load(t.TempDir() + "/none.yaml")
+	cfg.Keys.Dir = t.TempDir()
+	host := ts.Listener.Addr().String()
+	cfg.Aliases = map[string]string{host: "skywalking"}
+	_, s, err := New(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, terr := s.ensureLogin(context.Background(), nil, ts.URL+"/sky/general-service", "", "", false, true, 0); terr == nil {
+		t.Fatal("expected failure: without roots the request goes to / which the server does not serve")
+	}
+	cfg.Roots = map[string]string{host: ts.URL + "/sky/"}
+	out, terr := s.ensureLogin(context.Background(), nil, ts.URL+"/sky/general-service", "", "", false, true, 0)
+	if terr != nil || out.BaseURL != ts.URL+"/sky" {
+		t.Fatalf("with roots: %+v %v", out, terr)
+	}
+}

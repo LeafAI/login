@@ -62,6 +62,7 @@ func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw,
 	if siteName == "" {
 		siteName = s.alias(base)
 	}
+	base = s.root(base)
 	d, err := site.Resolve(siteName, base)
 	if err != nil {
 		return nil, errf("unsupported_site", false, "%v", err)
@@ -235,6 +236,7 @@ func (s *Server) logout(_ context.Context, _ *mcp.CallToolRequest, in LogoutInpu
 	if terr != nil {
 		return nil, terr
 	}
+	base = s.root(base)
 	n := 0
 	if s.cache.Delete(session.Key(base)) {
 		n++
@@ -268,4 +270,16 @@ func (s *Server) hostAllowed(base *url.URL) bool {
 		}
 	}
 	return false
+}
+
+// root applies roots: for sites served under a path prefix the drivers need the full base URL.
+func (s *Server) root(base *url.URL) *url.URL {
+	for _, k := range []string{base.Host, base.Hostname()} {
+		if r, ok := s.cfg.Roots[k]; ok {
+			if u, err := url.Parse(strings.TrimRight(r, "/")); err == nil && u.Scheme != "" && u.Host == base.Host {
+				return u
+			}
+		}
+	}
+	return base
 }

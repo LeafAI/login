@@ -133,7 +133,7 @@ func (f *Flow) shutdown() {
 
 // Start launches (or joins) the login flow for a site. onDone runs once with the result.
 func (m *Manager) Start(d site.Driver, base *url.URL, reason string, hc *http.Client, onDone func(*Flow, Result)) *Flow {
-	key := base.Scheme + "://" + base.Host
+	key := site.Key(base)
 	m.mu.Lock()
 	if f := m.byBase[key]; f != nil {
 		m.mu.Unlock()

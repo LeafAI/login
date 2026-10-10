@@ -28,6 +28,7 @@ func (s *Server) archeryClient(ctx context.Context, req *mcp.CallToolRequest, u 
 		return nil, out, nil
 	}
 	base, _ := baseOf(u.URL)
+	base = s.root(base)
 	e, ok := s.cache.Get(ctx, base, s.hc)
 	if !ok {
 		return nil, nil, errf("internal", true, "session vanished right after login; retry")

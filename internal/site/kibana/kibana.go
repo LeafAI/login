@@ -1,4 +1,9 @@
-// Package kibana logs in to Kibana's built-in "basic" security provider.
+// Package kibana logs in to Kibana's built-in basic (username/password) security provider.
+//
+// Verified against the Kibana source: POST /internal/security/login takes
+// {providerType, providerName, currentURL, params:{username,password}} and answers {"location": ...} with the
+// session cookie. providerName must match the configured provider (not always "basic"), so it is discovered
+// from the unauthenticated GET /internal/security/login_state.
 //
 // Kibana's built-in basic provider has no TOTP. As a courtesy for setups with a custom provider or a
 // fronting auth layer, a 401 whose body mentions OTP/MFA makes the driver ask for a "totp" round and
@@ -34,7 +39,8 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 		return nil, err
 	}
 	params := map[string]string{"username": creds["username"], "password": creds["password"]}
-	status, body, err := attempt(ctx, c, base, params)
+	ptype, pname := loginProvider(ctx, c, base)
+	status, body, err := attempt(ctx, c, base, ptype, pname, params)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +50,7 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 			return nil, err
 		}
 		params["otp"] = strings.TrimSpace(code["code"])
-		if status, body, err = attempt(ctx, c, base, params); err != nil {
+		if status, body, err = attempt(ctx, c, base, ptype, pname, params); err != nil {
 			return nil, err
 		}
 	}
@@ -62,9 +68,40 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 	return s, nil
 }
 
-func attempt(ctx context.Context, c *http.Client, base *url.URL, params map[string]string) (int, string, error) {
+// loginProvider returns the first provider that uses the login form (basic or token); "basic"/"basic"
+// when the state endpoint is unavailable.
+func loginProvider(ctx context.Context, c *http.Client, base *url.URL) (typ, name string) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/internal/security/login_state", nil)
+	req.Header.Set("x-elastic-internal-origin", "kibana")
+	resp, err := c.Do(req)
+	if err != nil {
+		return "basic", "basic"
+	}
+	var st struct {
+		Selector struct {
+			Providers []struct {
+				Type          string `json:"type"`
+				Name          string `json:"name"`
+				UsesLoginForm bool   `json:"usesLoginForm"`
+			} `json:"providers"`
+		} `json:"selector"`
+	}
+	if resp.StatusCode == 200 {
+		json.Unmarshal([]byte(site.ReadBody(resp)), &st)
+	} else {
+		resp.Body.Close()
+	}
+	for _, p := range st.Selector.Providers {
+		if p.UsesLoginForm && p.Name != "" {
+			return p.Type, p.Name
+		}
+	}
+	return "basic", "basic"
+}
+
+func attempt(ctx context.Context, c *http.Client, base *url.URL, ptype, pname string, params map[string]string) (int, string, error) {
 	status, body, err := doLogin(ctx, c, base, "/internal/security/login", map[string]any{
-		"providerType": "basic", "providerName": "basic", "currentURL": base.String() + "/login", "params": params})
+		"providerType": ptype, "providerName": pname, "currentURL": base.String() + "/login", "params": params})
 	if err == nil && status == 404 { // Kibana 7.x without the internal route
 		status, body, err = doLogin(ctx, c, base, "/api/security/v1/login", map[string]any{
 			"username": params["username"], "password": params["password"]})
