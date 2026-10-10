@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,7 +110,7 @@ func TestSingleFlightAndCancel(t *testing.T) {
 func TestMessageEscapesAgentText(t *testing.T) {
 	u, _ := url.Parse("https://site.example")
 	f := &Flow{Base: u, Reason: "[Click here to confirm](https://evil.example)\n# urgent"}
-	msg := message(f, "login", 1, "https://page.example/#v=1", "ABCDEF0123456789ABCDEF", time.Now())
+	msg := message(f, "login", 1, "https://page.example/#v=1", "ABCDEF0123456789ABCDEF", time.Now(), "")
 	if strings.Contains(msg, "](https://evil") {
 		t.Errorf("agent-supplied link survived:\n%s", msg)
 	}
@@ -149,5 +150,107 @@ func TestManagerCloseTearsDownPendingTunnel(t *testing.T) {
 	case <-f.Done():
 	default:
 		t.Error("flow still running after Close")
+	}
+}
+
+// dyingTunnels hands out tunnels whose Done channels the test controls.
+type dyingTunnels struct {
+	mu      sync.Mutex
+	started []*dyingTunnel
+}
+
+type dyingTunnel struct {
+	url  string
+	done chan struct{}
+	once sync.Once
+}
+
+func (d *dyingTunnel) PublicURL() string     { return d.url }
+func (d *dyingTunnel) Done() <-chan struct{} { return d.done }
+func (d *dyingTunnel) Close()                { d.once.Do(func() { close(d.done) }) }
+
+func (d *dyingTunnels) Start(context.Context, int) (Tunnel, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	t := &dyingTunnel{url: fmt.Sprintf("http://127.0.0.1:%d", 1000+len(d.started)), done: make(chan struct{})}
+	d.started = append(d.started, t)
+	return t, nil
+}
+
+func (d *dyingTunnels) count() int { d.mu.Lock(); defer d.mu.Unlock(); return len(d.started) }
+
+type recNotifier struct {
+	mu    sync.Mutex
+	texts []string
+}
+
+func (r *recNotifier) Markdown(_ context.Context, _, text string) error {
+	r.mu.Lock()
+	r.texts = append(r.texts, text)
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *recNotifier) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.texts...)
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for i := 0; i < 300; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestTunnelRestartResendsLink(t *testing.T) {
+	ts := &dyingTunnels{}
+	rec := &recNotifier{}
+	m := manager(t, rec, ts, time.Minute)
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+
+	ts.started[0].Close() // the ssh process dies while the human has not answered
+	waitFor(t, "replacement message", func() bool { return len(rec.all()) == 2 })
+	msgs := rec.all()
+	if !strings.Contains(msgs[1], "replaces the previous one") || strings.Contains(msgs[0], "replaces") {
+		t.Errorf("messages:\n%s\n---\n%s", msgs[0], msgs[1])
+	}
+	if ts.count() != 2 || !strings.Contains(msgs[1], "127.0.0.1%3A1001") && !strings.Contains(msgs[1], "127.0.0.1:1001") {
+		t.Errorf("new tunnel url not in the new link (tunnels=%d):\n%s", ts.count(), msgs[1])
+	}
+	if f.Snapshot().Phase != "waiting_human" {
+		t.Errorf("phase %q", f.Snapshot().Phase)
+	}
+	m.Close()
+}
+
+func TestTunnelGivesUpAfterRepeatedDeaths(t *testing.T) {
+	ts := &dyingTunnels{}
+	rec := &recNotifier{}
+	m := manager(t, rec, ts, time.Minute)
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	for i := 0; i < maxTunnelRestarts+1; i++ {
+		i := i
+		waitFor(t, "tunnel start", func() bool { return ts.count() > i })
+		ts.mu.Lock()
+		tn := ts.started[i]
+		ts.mu.Unlock()
+		tn.Close()
+	}
+	select {
+	case <-f.Done():
+		if !errors.Is(f.Result().Err, ErrTunnel) {
+			t.Errorf("err = %v", f.Result().Err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("flow did not give up")
 	}
 }

@@ -123,3 +123,20 @@ func TestBuiltinCommandLinesParse(t *testing.T) {
 		}
 	}
 }
+
+// A tunnel whose ssh process exits on its own must report Done (the flow relies on this to restart it).
+func TestDoneClosesWhenSSHExits(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "ssh")
+	os.WriteFile(script, []byte("#!/bin/sh\necho 'https://short-lived.lhr.life'\nsleep 1\n"), 0o755)
+	tn, err := (&Runner{SSH: script, Timeout: 5 * time.Second}).Start(context.Background(), []*Provider{Builtins()["localhost.run"]}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tn.Close()
+	select {
+	case <-tn.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Done did not close after the process exited")
+	}
+}

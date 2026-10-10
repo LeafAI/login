@@ -111,6 +111,7 @@ type Flow struct {
 	// lazily created by the first Ask
 	key    *keyring.Key
 	srv    *api.Server
+	port   int
 	tn     Tunnel
 	cur    *api.Round
 	rounds int
@@ -244,7 +245,30 @@ func (f *Flow) setup(ctx context.Context) error {
 		srv.Close()
 		return fmt.Errorf("%w: %v", ErrTunnel, err)
 	}
-	f.key, f.srv, f.tn = key, srv, tn
+	f.key, f.srv, f.port, f.tn = key, srv, port, tn
+	return nil
+}
+
+const maxTunnelRestarts = 2
+
+// tunnelDown reports whether the current tunnel process has exited.
+func (f *Flow) tunnelDown() bool {
+	select {
+	case <-f.tn.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+// restartTunnel replaces a dead tunnel; the API server (and its tokens) stay the same.
+func (f *Flow) restartTunnel(ctx context.Context) error {
+	f.tn.Close()
+	tn, err := f.m.cfg.Tunnels.Start(ctx, f.port)
+	if err != nil {
+		return fmt.Errorf("%w: restart failed: %v", ErrTunnel, err)
+	}
+	f.tn = tn
 	return nil
 }
 
@@ -253,6 +277,13 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 	f.set(Snapshot{Phase: "starting", Mode: mode, Round: f.rounds + 1})
 	if err := f.setup(ctx); err != nil {
 		return nil, err
+	}
+	restarts := 0
+	if f.tunnelDown() { // died between rounds
+		if err := f.restartTunnel(ctx); err != nil {
+			return nil, err
+		}
+		restarts++
 	}
 	if f.cur != nil { // previous round succeeded; tell its page to wait for the next link
 		f.cur.SetStatus(api.StateNextRound, "")
@@ -271,14 +302,20 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 			cf = append(cf, web.Field{Name: x.Name, Label: x.Label, Secret: x.Secret})
 		}
 	}
-	link := web.Link(f.m.cfg.PageURL, web.Round{
-		Site: f.Base.Host, Mode: mode, N: f.rounds,
-		APIBase:   strings.TrimRight(f.tn.PublicURL(), "/") + "/" + round.Token,
-		PublicKey: pub, Fingerprint: f.key.Fingerprint(), Fields: cf,
-	})
 	expires := time.Now().Add(f.m.cfg.TTL)
-	if err := f.m.cfg.Notifier.Markdown(ctx, "Login request: "+f.Base.Host, message(f, mode, f.rounds, link, f.key.Fingerprint(), expires)); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrNotify, err)
+	send := func(note string) error {
+		link := web.Link(f.m.cfg.PageURL, web.Round{
+			Site: f.Base.Host, Mode: mode, N: f.rounds,
+			APIBase:   strings.TrimRight(f.tn.PublicURL(), "/") + "/" + round.Token,
+			PublicKey: pub, Fingerprint: f.key.Fingerprint(), Fields: cf,
+		})
+		if err := f.m.cfg.Notifier.Markdown(ctx, "Login request: "+f.Base.Host, message(f, mode, f.rounds, link, f.key.Fingerprint(), expires, note)); err != nil {
+			return fmt.Errorf("%w: %v", ErrNotify, err)
+		}
+		return nil
+	}
+	if err := send(""); err != nil {
+		return nil, err
 	}
 	f.set(Snapshot{Phase: "waiting_human", Mode: mode, Round: f.rounds, ExpiresAt: expires})
 	f.logf("waiting for human: %s round %d (%s)", f.Base.Host, f.rounds, mode)
@@ -291,23 +328,39 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 	}
 	ch := make(chan res, 1)
 	go func() { s, err := round.Wait(wctx); ch <- res{s, err} }()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+	for {
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				round.SetStatus(api.StateFailed, "expired")
+				return nil, ErrHumanTimeout
 			}
-			round.SetStatus(api.StateFailed, "expired")
-			return nil, ErrHumanTimeout
+			if r.sub.Action == api.ActionReject {
+				round.SetStatus(api.StateRejected, "")
+				return nil, &RejectedError{Reason: r.sub.Reason}
+			}
+			f.set(Snapshot{Phase: "working", Mode: mode, Round: f.rounds})
+			return site.Credentials(r.sub.Fields), nil
+		case <-f.tn.Done():
+			// The tunnel died while the human had not answered yet: bring up a new one and send a
+			// replacement link for the same round (same token and key, new public address).
+			if restarts >= maxTunnelRestarts {
+				return nil, fmt.Errorf("%w: ssh tunnel exited %d times", ErrTunnel, restarts+1)
+			}
+			restarts++
+			f.logf("tunnel died; restarting (%d/%d)", restarts, maxTunnelRestarts)
+			if err := f.restartTunnel(ctx); err != nil {
+				return nil, err
+			}
+			if err := send("The tunnel connection dropped and was re-created. This link replaces the previous one."); err != nil {
+				return nil, err
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		if r.sub.Action == api.ActionReject {
-			round.SetStatus(api.StateRejected, "")
-			return nil, &RejectedError{Reason: r.sub.Reason}
-		}
-		f.set(Snapshot{Phase: "working", Mode: mode, Round: f.rounds})
-		return site.Credentials(r.sub.Fields), nil
-	case <-f.tn.Done():
-		return nil, fmt.Errorf("%w: ssh tunnel exited", ErrTunnel)
 	}
 }
 
@@ -334,7 +387,7 @@ func (f *Flow) finish(sess *site.Session, err error) {
 	}
 }
 
-func message(f *Flow, mode string, n int, link, fpr string, expires time.Time) string {
+func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, note string) string {
 	step := map[string]string{"login": "username & password", "totp": "two-factor code", "custom": "additional information"}[mode]
 	if step == "" {
 		step = mode
@@ -347,7 +400,10 @@ func message(f *Flow, mode string, n int, link, fpr string, expires time.Time) s
 	if len(short) > 16 {
 		short = short[len(short)-16:]
 	}
-	return fmt.Sprintf("### Login request: %s\n\n"+
+	if note != "" {
+		note = "**" + note + "**\n\n"
+	}
+	return note + fmt.Sprintf("### Login request: %s\n\n"+
 		"- **Step %d**: %s\n- **Requested by AI agent**: %s\n- **Expires**: %s\n- **Key**: `%s`\n\n"+
 		"[Open the login page](%s)\n\n"+
 		"You can also press **Reject** on the page and give a reason. "+
