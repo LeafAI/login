@@ -30,7 +30,7 @@ take minutes. So every blocking tool:
 - sends MCP `notifications/progress` every 5 s while waiting (resets client timeouts that honour it) and
   `notifications/message` for milestones ("DingTalk sent", "waiting for TOTP", "waiting for approval");
 - if still unfinished, returns a **pending** result (not an error) containing an id (`login_id` /
-  `audit_id`) and `next_tool`; the agent calls `login_wait` / `archery_wait` with that id.
+  `workflow_id`) and `next_tool`; the agent calls `login_wait` / `archery_wait` with that id.
   Waiting never restarts the flow and never re-notifies the human.
 
 **Result shape.** Success and pending are normal results (`isError: false`) with `structuredContent`
@@ -185,18 +185,18 @@ Input
 Output (`oneOf` by `status`)
 ```jsonc
 // status = "done" | "failed"
-{ "status":"done", "audit_id":123, "workflow_url":"https://archery/.../detail/123/",
+{ "status":"done", "workflow_id":123, "workflow_url":"https://archery/detail/123/",
   "results":[ { "sequence":1,"sql":"UPDATE ...","state":"success"|"error"|"warning",
                 "affected_rows":3,"error":"","execute_ms":8,"backup_id":"..." } ],
   "approver":"zhangsan","approved_at":"...","executed_at":"..." }
 
 // status = "pending"  (still waiting for a person or still executing)
 { "status":"pending", "phase":"checking"|"awaiting_approval"|"executing",
-  "audit_id":123, "workflow_url":"...", "check":[ {"sequence":1,"level":"warning","message":"..."} ],
+  "workflow_id":123, "workflow_url":"...", "check":[ {"sequence":1,"level":"warning","message":"..."} ],
   "next_tool":"archery_wait" }
 
 // status = "aborted"  (rejected or cancelled in Archery, or approval timed out and we cancelled it)
-{ "status":"aborted","audit_id":123,"reason":"..." }
+{ "status":"aborted","workflow_id":123,"reason":"..." }
 
 // status = "pending", phase = "login"  (the Archery login itself still waits for the human)
 { "status":"pending","phase":"login","login_id":"lg_...","next_tool":"login_wait" }
@@ -206,17 +206,17 @@ error `hint`/structured data); `warning` is submitted and reported.
 
 ## 9. `archery_wait`
 
-Input: `{ "audit_id": integer (required), "url": uri (required), "max_block_seconds": integer? }`.
+Input: `{ "workflow_id": integer (required), "url": uri (required), "max_block_seconds": integer? }`.
 Behaviour: if awaiting approval, waits; once approved, executes **once** (guarded by workflow status
 and a local lock) and returns the `archery_run_sql` output shape. Safe to call repeatedly or after a
 restart; an already-executed workflow just returns its result.
 
 ## 10. `archery_workflow_status`
 
-Input: `{ "audit_id": integer, "url": uri }` (both required).
+Input: `{ "workflow_id": integer, "url": uri }` (both required).
 Output
 ```jsonc
-{ "audit_id":123,"title":"...","status":"awaiting_approval"|"approved"|"executing"|"done"|"failed"|"aborted"|"check_failed",
+{ "workflow_id":123,"title":"...","status":"awaiting_approval"|"approved"|"executing"|"done"|"failed"|"aborted"|"check_failed",
   "status_text":"<Archery's own wording>","submitter":"...","instance":"...","database":"...",
   "created_at":"...","review_history":[ {"stage":"...","by":"...","result":"...","at":"..."} ],
   "results":[ ... ]  /* same item shape as archery_run_sql, when executed */ }
@@ -224,7 +224,7 @@ Output
 
 ## 11. `archery_cancel`
 
-Input: `{ "audit_id": integer, "url": uri, "reason": string? }`. Output: `{ "status": "aborted" }`.
+Input: `{ "workflow_id": integer, "url": uri, "reason": string? }`. Output: `{ "status": "aborted" }`.
 Refuses if already executing/executed (`invalid_argument`).
 
 ## 12. Human-facing side effects (summary)
