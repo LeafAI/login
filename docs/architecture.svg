@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 700" width="1100" height="700" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" role="img" aria-labelledby="t d">
+  <title id="t">login: production deployment architecture</title>
+  <desc id="d">An AI agent calls the login MCP server over stdio. login starts a one-shot API on localhost and an outbound SSH reverse tunnel, and sends one link through a DingTalk robot. The person opens the link, which loads a static page from GitHub Pages, and submits an encrypted credential through the tunnel. login decrypts it, performs the real login on the target site and returns the cookie or token to the agent.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#334155"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#15803d"/></marker>
+  </defs>
+  <rect width="1100" height="700" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="550" y="32" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">login: production deployment</text>
+
+  <!-- zones -->
+  <rect x="20" y="52" width="560" height="496" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+  <text x="34" y="74" font-weight="700" fill="#334155">Your machine or container (one process per agent, config and keys in a volume)</text>
+  <rect x="20" y="568" width="560" height="96" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="34" y="590" font-weight="700" fill="#334155">Corporate network</text>
+  <rect x="640" y="52" width="440" height="612" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="654" y="74" font-weight="700" fill="#334155">Internet</text>
+
+  <!-- agent -->
+  <rect x="40" y="108" width="150" height="62" rx="8" fill="#e0f2fe" stroke="#0369a1"/>
+  <text x="115" y="134" text-anchor="middle" font-weight="700" fill="#0c4a6e">AI agent</text>
+  <text x="115" y="152" text-anchor="middle" fill="#0c4a6e">MCP client</text>
+
+  <!-- local state -->
+  <rect x="40" y="230" width="190" height="236" rx="8" fill="#fef9c3" stroke="#a16207"/>
+  <text x="135" y="254" text-anchor="middle" font-weight="700" fill="#713f12">~/.config/login (0600)</text>
+  <g fill="#713f12">
+    <text x="54" y="282">config.yaml</text>
+    <text x="54" y="306">keys/  OpenPGP pool</text>
+    <text x="54" y="330">sessions.enc + key</text>
+    <text x="54" y="354">totp secrets (optional)</text>
+    <text x="54" y="378">audit.jsonl</text>
+    <text x="54" y="408" font-size="12">Docker: mount as a volume</text>
+    <text x="54" y="428" font-size="12">Never holds a password:</text>
+    <text x="54" y="446" font-size="12">only the login result.</text>
+  </g>
+
+  <!-- login server -->
+  <rect x="290" y="90" width="270" height="436" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
+  <text x="425" y="114" text-anchor="middle" font-weight="700" font-size="15" fill="#14532d">login (MCP server, Go)</text>
+  <g fill="#ffffff" stroke="#15803d">
+    <rect x="306" y="128" width="238" height="42" rx="6"/>
+    <rect x="306" y="178" width="238" height="42" rx="6"/>
+    <rect x="306" y="228" width="238" height="42" rx="6"/>
+    <rect x="306" y="278" width="238" height="42" rx="6"/>
+    <rect x="306" y="328" width="238" height="42" rx="6"/>
+    <rect x="306" y="378" width="238" height="42" rx="6"/>
+    <rect x="306" y="428" width="238" height="42" rx="6" fill="#fff7ed" stroke="#c2410c"/>
+  </g>
+  <g fill="#14532d" font-size="12.5">
+    <text x="318" y="146" font-weight="700">Flow manager</text><text x="318" y="162">one flow per site, rate limits, audit</text>
+    <text x="318" y="196" font-weight="700">Key pool</text><text x="318" y="212">OpenPGP, each key 8 uses / 24 h</text>
+    <text x="318" y="246" font-weight="700">One-shot round API</text><text x="318" y="262">127.0.0.1, decrypt, nonce, 10 min TTL</text>
+    <text x="318" y="296" font-weight="700">Site drivers</text><text x="318" y="312">gitlab jenkins kibana kubesphere …</text>
+    <text x="318" y="346" font-weight="700">Session cache</text><text x="318" y="362">probed before every reuse</text>
+    <text x="318" y="396" font-weight="700">DingTalk notifier</text><text x="318" y="412">signed webhook, escaped text</text>
+    <text x="318" y="446" font-weight="700" fill="#9a3412">ssh -R child process</text><text x="318" y="462" fill="#9a3412">outbound only, no open port</text>
+  </g>
+
+  <!-- target sites -->
+  <rect x="40" y="602" width="520" height="48" rx="8" fill="#ffffff" stroke="#475569"/>
+  <text x="300" y="623" text-anchor="middle" fill="#0f172a" font-weight="700">GitLab · Jenkins · Kibana · KubeSphere · Nightingale · Archery</text>
+  <text x="300" y="640" text-anchor="middle" fill="#0f172a">SkyWalking · any site described in YAML</text>
+
+  <!-- internet boxes -->
+  <rect x="800" y="92" width="240" height="62" rx="8" fill="#e0e7ff" stroke="#4338ca"/>
+  <text x="920" y="118" text-anchor="middle" font-weight="700" fill="#312e81">DingTalk robot</text>
+  <text x="920" y="136" text-anchor="middle" fill="#312e81">one link + key code per round</text>
+
+  <rect x="800" y="188" width="240" height="62" rx="8" fill="#e0e7ff" stroke="#4338ca"/>
+  <text x="920" y="214" text-anchor="middle" font-weight="700" fill="#312e81">GitHub Pages (static page)</text>
+  <text x="920" y="232" text-anchor="middle" fill="#312e81">leafai.github.io/login or self-hosted</text>
+
+  <rect x="790" y="292" width="260" height="84" rx="8" fill="#fce7f3" stroke="#be185d"/>
+  <text x="920" y="318" text-anchor="middle" font-weight="700" fill="#831843">The person's browser</text>
+  <text x="920" y="336" text-anchor="middle" fill="#831843">checks the key code, types the credential,</text>
+  <text x="920" y="352" text-anchor="middle" fill="#831843">encrypts it in the page, or presses Reject</text>
+
+  <rect x="790" y="430" width="260" height="104" rx="8" fill="#fff7ed" stroke="#c2410c" stroke-dasharray="5 4"/>
+  <text x="920" y="456" text-anchor="middle" font-weight="700" fill="#7c2d12">SSH tunnel provider</text>
+  <text x="920" y="474" text-anchor="middle" fill="#7c2d12">pinggy · localhost.run · serveo ·</text>
+  <text x="920" y="490" text-anchor="middle" fill="#7c2d12">tunnl.gg · your own server</text>
+  <text x="920" y="514" text-anchor="middle" font-size="12" fill="#7c2d12">untrusted: sees ciphertext only</text>
+
+  <!-- arrows -->
+  <g fill="none" stroke="#334155" stroke-width="1.8">
+    <path d="M190 128 H290" marker-end="url(#a)"/>
+    <path d="M290 152 H190" marker-end="url(#a)" stroke-dasharray="4 3"/>
+    <path d="M230 350 H290" marker-end="url(#a)" marker-start="url(#a)"/>
+    <path d="M560 398 H690 V123 H800" marker-end="url(#a)"/>
+    <path d="M1040 123 H1062 V334 H1050" marker-end="url(#a)"/>
+    <path d="M920 250 V292" marker-end="url(#a)"/>
+    <path d="M920 376 V430" marker-end="url(#a)"/>
+    <path d="M790 478 H560" marker-end="url(#a)" marker-start="url(#a)" stroke="#c2410c"/>
+    <path d="M425 526 V602" marker-end="url(#a)"/>
+  </g>
+  <path d="M800 219 H762 V320 H790" fill="none" stroke="#334155" stroke-width="1.8" marker-end="url(#a)" stroke-dasharray="4 3"/>
+
+  <!-- step badges and labels -->
+  <g font-size="12" fill="#0f172a">
+    <text x="198" y="120">① login(url)</text>
+    <text x="198" y="170">cookie / token</text>
+    <text x="580" y="388" text-anchor="start">② link</text>
+    <text x="1076" y="150" transform="rotate(90 1076 150)">③ message</text>
+    <text x="750" y="296" transform="rotate(-90 750 296)">④ loads page</text>
+    <text x="928" y="406">⑤ encrypted POST</text>
+    <text x="596" y="470">⑥ forwarded to 127.0.0.1</text>
+    <text x="436" y="570">⑦ real login flow (HTTPS)</text>
+  </g>
+</svg>
