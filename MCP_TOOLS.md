@@ -61,7 +61,7 @@ pending answer; no field is `required`, because one result type serves both. A t
 |---|---|
 | `login://sites` | same as `login_sites` |
 | `login://sessions` | same as `login_sessions` |
-| `login://policy` | `allowed_hosts`, `max_block_seconds`, `limits` (per site / total / window / reject cool-down), `archery_ddl_allowed`, `audit_enabled`, `human_step_ttl_seconds` |
+| `login://policy` | `allowed_hosts`, `max_block_seconds`, `limits` (per site / total / window / reject cool-down), `archery_ddl_allowed`, `audit_enabled`, `human_step_ttl_seconds`, `link_unlock_required`, `sealing_code_required` (which TOTP factors the person is asked for; never a secret or a code) |
 
 **Server instructions.** At connect time the server tells the model how to use the tools: call `login`, on
 `pending` call `login_wait` (never `login` again), what to do for each error code, treat cookies as secrets.

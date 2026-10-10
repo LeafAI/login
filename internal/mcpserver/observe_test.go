@@ -18,6 +18,7 @@ import (
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/flow"
 	"github.com/LeafAI/login/internal/site/archery"
+	"github.com/LeafAI/login/internal/totp"
 )
 
 func events(t *testing.T, path string) []audit.Event {
@@ -171,5 +172,85 @@ func TestAuditClipsAgentControlledReason(t *testing.T) {
 	got := events(t, cfg.Audit.File)
 	if len(got) != 1 || len(got[0].Reason) > maxReasonBytes || !strings.HasPrefix(got[0].Reason, "界") {
 		t.Fatalf("reason must be bounded and still valid UTF-8, got %d bytes", len(got[0].Reason))
+	}
+}
+
+// ---- the two TOTP factors at start-up ----
+
+func writeSecret(t *testing.T, path string) {
+	t.Helper()
+	s, err := totp.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := totp.SaveSecret(path, s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newWith(t *testing.T, tweak func(*config.Config)) error {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := testConfig(t, dir)
+	tweak(cfg)
+	_, _, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}})
+	return err
+}
+
+// A factor that is on without a usable secret stops the server from starting. Carrying on would hand out plain links
+// to people who switched the protection on.
+func TestServerRefusesToStartWithAFactorOnAndNoSecret(t *testing.T) {
+	for name, tweak := range map[string]func(*config.Config){
+		"unlock":  func(c *config.Config) { c.Security.LinkTOTP.Enabled = true },
+		"sealing": func(c *config.Config) { c.Security.SealTOTP.Enabled = true },
+	} {
+		err := newWith(t, tweak)
+		if err == nil || !strings.Contains(err.Error(), "totp init") {
+			t.Errorf("%s: the server started with a factor on and no secret (err=%v)", name, err)
+		}
+	}
+}
+
+func TestServerStartsWithTheFactorsAndTheSecretsPresent(t *testing.T) {
+	err := newWith(t, func(c *config.Config) {
+		c.Security.LinkTOTP.Enabled, c.Security.SealTOTP.Enabled = true, true
+		writeSecret(t, c.Security.LinkTOTP.SecretFile)
+		writeSecret(t, c.Security.SealTOTP.SecretFile)
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+}
+
+func TestServerRefusesAnInvalidFactorSetting(t *testing.T) {
+	err := newWith(t, func(c *config.Config) {
+		c.Security.SealTOTP = config.TOTP{Enabled: true, Period: 5 * time.Second, Digits: 8, SecretFile: c.Security.SealTOTP.SecretFile}
+		writeSecret(t, c.Security.SealTOTP.SecretFile)
+	})
+	if err == nil {
+		t.Fatal("a 5 second period was accepted")
+	}
+}
+
+// The policy resource tells the agent which protections are on, without ever exposing a code or a secret path.
+func TestPolicyReportsTheFactorsWithoutSecrets(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(t, dir)
+	cfg.Security.LinkTOTP.Enabled, cfg.Security.SealTOTP.Enabled = true, true
+	writeSecret(t, cfg.Security.LinkTOTP.SecretFile)
+	writeSecret(t, cfg.Security.SealTOTP.SecretFile)
+	_, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := s.policy()
+	if !pol.LinkUnlockRequired || !pol.SealingCodeRequired {
+		t.Errorf("the policy must report both factors: %+v", pol)
+	}
+	raw, _ := json.Marshal(pol)
+	for _, leak := range []string{cfg.Security.LinkTOTP.SecretFile, cfg.Security.SealTOTP.SecretFile, "link.secret", "seal.secret"} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("the policy leaks %q: %s", leak, raw)
+		}
 	}
 }

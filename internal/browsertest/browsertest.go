@@ -64,6 +64,28 @@ type Result struct {
 	MainHidden  bool     `json:"mainHidden"`
 	PasteHidden bool     `json:"pasteHidden"`
 	Errors      []string `json:"errors"`
+	// FactorShown says whether the page asked for a second-factor (sealing) code.
+	FactorShown bool `json:"factorShown"`
+	// UnlockShown / FormShown say which part of the page is visible (the unlock box, or the credential form).
+	UnlockShown bool `json:"unlockShown"`
+	FormShown   bool `json:"formShown"`
+	// RequestsWhileLocked lists every network request the page made while it was locked (there must be none).
+	RequestsWhileLocked []string `json:"requestsWhileLocked"`
+	// UnlockLeft is what is still in the unlock box after the page has unlocked.
+	UnlockLeft string `json:"unlockLeft"`
+	// PageText is the visible text of the page, to check that nothing secret is shown while it is locked.
+	PageText string `json:"pageText"`
+	// Derived holds the keys the page derives from fixed inputs (action "derive"), as hex.
+	Derived struct {
+		Stretched string `json:"stretched"`
+		PlainKey  string `json:"plainKey"`
+		Key       string `json:"key"`
+		// the link layer
+		LinkStretched string `json:"linkStretched"`
+		LinkSlotKey   string `json:"linkSlotKey"`
+	} `json:"derived"`
+	// RequestBody is what the page posted to /submit, as it went over the wire.
+	RequestBody string `json:"requestBody"`
 	// Imgs describes the captcha images the page rendered (naturalWidth > 0 means the image loaded).
 	Imgs []struct {
 		Src string `json:"src"`

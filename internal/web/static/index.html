@@ -22,6 +22,19 @@
     <div class="row"><button class="primary" id="use-link" type="button">Continue</button></div>
   </section>
 
+  <section id="unlock" hidden>
+    <div class="verify">
+      <p><strong>Check before typing anything.</strong> This code must be identical to the key code in the
+      DingTalk message that brought you here. If it differs or there is no such message, close this page.</p>
+      <p class="code" id="u-code"></p>
+    </div>
+    <p>The details of this login (which site, where to send the answer) are encrypted in the link. Type the
+    <span id="u-digits"></span>-digit unlock code from your authenticator to read them.</p>
+    <label for="unlock-code">Unlock code</label>
+    <input id="unlock-code" type="password" autocomplete="off" inputmode="numeric" spellcheck="false">
+    <div class="row"><button class="primary" id="unlock-go" type="button">Unlock</button></div>
+  </section>
+
   <section id="main" hidden>
     <div class="verify">
       <p><strong>Check before typing anything.</strong> This code must be identical to the key code in the

@@ -74,6 +74,29 @@ Use `login doctor -site <url>` for every site before the first login. It needs n
 Host names rarely contain the product name, so add `aliases:` (`es.corp.example: kibana`) and, to limit what the
 agent may target, `security.allowed_hosts`.
 
+### The two TOTP factors (optional)
+
+Two time-based codes, from your authenticator, add layers around the credential. Both are off by default.
+
+```
+login config totp init           # make both secrets, show them (and their otpauth:// URIs), switch both on
+login config totp init link      # just the unlock factor (or: seal)
+login config totp code           # print the current codes (valid for ...), for an authenticator that cannot do the period
+login config totp status         # what is on, with settings; never a secret or a code
+login config totp off link       # switch off, keep the secret (so your authenticator entry stays valid);  on link  to switch back
+```
+
+* **Unlock code** (`security.link_totp`): the DingTalk link hides the site, the tunnel address and the one-shot password; the
+  page asks for this code before it shows anything. The default period is **10 minutes**, the longest 1Password supports
+  (600 s); 1Password also supports the default of 8 digits. A longer period works in `config.yaml`, but many authenticators ignore a custom period: use `totp code`.
+* **Sealing code** (`security.seal_totp`, 30 s): the page asks for this code too and seals what you type with it.
+* Register each secret in your authenticator when `totp init` shows it; it is not shown again.
+* If a factor is on and its secret file is missing or readable by others, **the server will not start** (`login doctor`
+  says which). A person who has lost an authenticator entry: delete the secret file and run `totp init` again.
+* The unlock period must also fit the link's life: a link can touch at most 4 windows of it (more cannot be carried). With
+  the default `web.ttl` of 10 minutes that means a period of **200 seconds or longer**; a shorter one is refused at start-up
+  and by `login doctor`. A longer `web.ttl` needs a proportionally longer period.
+
 ### Audit log and request limits
 
 * `audit.jsonl` (next to the config; 0600) gets one JSON line per tool call, per request that reached a person and

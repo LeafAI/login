@@ -156,6 +156,17 @@ docker run -i --rm -v login-data:/home/login/.config/login login          # the 
 The image contains `ssh` (tunnels), runs as a non-root user and keeps config, keys and the audit log in the volume.
 `login version` prints the build.
 
+## Two optional TOTP factors
+
+```
+login config totp init     # make the secrets, register them in your authenticator (1Password: 10 min is its maximum period)
+```
+
+An **unlock code** (long period) hides the site, the tunnel address and the one-shot password in the DingTalk link until
+you type the code in the page; a **sealing code** (30 s) is mixed into the key that seals what you type. They sit on top of
+the always-on AES-256-GCM seal and the OpenPGP layer, are never sent anywhere, and are not a substitute for either. See
+`DESIGN.md` 4.2a for what they do and do not protect against, and `docs/OPERATING.md` for the commands.
+
 ## Roadmap
 
 Sharing one gateway between several agents (network transport, caller identity, session isolation), keeping

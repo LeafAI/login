@@ -27,6 +27,8 @@ var (
 	ErrHumanTimeout = errors.New("nobody completed the login step before it expired")
 	ErrNotify       = errors.New("could not notify the human")
 	ErrTunnel       = errors.New("tunnel unavailable")
+	// ErrFactor means a configured TOTP factor could not be applied to the link, so no link was sent.
+	ErrFactor = errors.New("a configured one-time-code factor could not be applied")
 )
 
 // RejectedError is returned when the human pressed Reject.
@@ -47,6 +49,12 @@ type TunnelStarter interface {
 	Start(ctx context.Context, localPort int) (Tunnel, error)
 }
 
+// CodeSource is a time-based code (a TOTP): the codes valid between two moments, and how many digits they have.
+type CodeSource interface {
+	Window(from, to time.Time) []string
+	Digits() int
+}
+
 type Tunnel interface {
 	PublicURL() string
 	Done() <-chan struct{}
@@ -63,6 +71,12 @@ type Config struct {
 	// OutcomeCap is the longest the tunnel stays up after a login that ended while a page was listening (default
 	// 10 s): enough for the page's next poll to read the outcome. Every other ending closes the tunnel at once.
 	OutcomeCap time.Duration
+	// Unlock, when set, is the long-period factor: the secret parameters of every link (site, tunnel address, one-shot
+	// password) are encrypted in the DingTalk message and the person needs its code to read them in the page.
+	Unlock CodeSource
+	// Seal, when set, is the short-period factor: the page seals the credential with its code before anything leaves
+	// the browser, and the server opens it with the code it computes itself.
+	Seal CodeSource
 	// FlushDelay is how long the tunnel stays up after the page has read the final state, so that the response that
 	// carried it is delivered and a repeated poll is still answered (default 3 s). It is a delay, not a grace for
 	// waiting: the tunnel is closed when it ends.
@@ -276,6 +290,9 @@ func (f *Flow) setup(ctx context.Context) error {
 		return fmt.Errorf("key pool: %w", err)
 	}
 	srv := api.NewServer(key)
+	if f.m.cfg.Seal != nil {
+		srv.SetFactor(f.m.cfg.Seal)
+	}
 	port, err := srv.Start()
 	if err != nil {
 		return err
@@ -389,7 +406,7 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 		f.cur.SetStatus(api.StateNextRound, "")
 	}
 	f.rounds++
-	round := f.srv.NewRound(mode, f.rounds)
+	round := f.srv.NewRoundAt(web.BoundSite(f.Base.Host), mode, f.rounds, time.Now())
 	f.cur = round
 
 	pub, err := f.key.PublicKeyBinary()
@@ -404,12 +421,27 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 	}
 	expires := time.Now().Add(f.m.cfg.TTL)
 	send := func(note string) error {
-		link := web.Link(f.m.cfg.PageURL, web.Round{
+		wr := web.Round{
 			Site: f.Base.Host, Mode: mode, N: f.rounds,
 			APIBase:   strings.TrimRight(f.tn.PublicURL(), "/") + "/" + round.Token,
-			PublicKey: pub, Fingerprint: f.key.Fingerprint(), Fields: cf,
-		})
-		if err := f.m.cfg.Notifier.Markdown(ctx, "Login request: "+f.Base.Host, message(f, mode, f.rounds, link, f.key.Fingerprint(), expires, note)); err != nil {
+			PublicKey: pub, Fingerprint: f.key.Fingerprint(), Password: round.Password(), Fields: cf,
+		}
+		if sealSrc := f.m.cfg.Seal; sealSrc != nil {
+			wr.FactorDigits = sealSrc.Digits()
+		}
+		if unlock := f.m.cfg.Unlock; unlock != nil {
+			// The person may open the link at any moment of its life, so the codes of every window from now until it
+			// expires are candidates; the page tries them against the code the person types.
+			wr.LinkCodes = unlock.Window(time.Now(), expires)
+			wr.LinkDigits = unlock.Digits()
+		}
+		// A factor that is switched on but cannot be applied stops the login here. A plain link would make the person
+		// believe that the parameters are hidden.
+		link, err := web.LinkChecked(f.m.cfg.PageURL, wr)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrFactor, err)
+		}
+		if err := f.m.cfg.Notifier.Markdown(ctx, "Login request: "+f.Base.Host, message(f, mode, f.rounds, link, f.key.Fingerprint(), expires, note, f.m.cfg.Unlock != nil, f.m.cfg.Seal != nil)); err != nil {
 			return fmt.Errorf("%w: %v", ErrNotify, err)
 		}
 		return nil
@@ -510,7 +542,7 @@ func (f *Flow) finish(sess *site.Session, err error) {
 // pageIsListening reports whether a human round was open when the login ended, so a page may still poll.
 func (f *Flow) pageIsListening() bool { return f.cur != nil && f.tn != nil }
 
-func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, note string) string {
+func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, note string, unlockOn, sealOn bool) string {
 	step := map[string]string{"login": "username & password", "totp": "two-factor code", "custom": "additional information"}[mode]
 	if step == "" {
 		step = mode
@@ -530,10 +562,27 @@ func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, n
 	short = strings.Join(groups, " ")
 	return note + fmt.Sprintf("### Login request: %s\n\n"+
 		"- **Step %d**: %s\n- **Requested by AI agent**: %s\n- **Expires**: %s\n- **Key code** (compare it with the page): `%s`\n\n"+
+		"%s"+
 		"[Open the login page](%s)\n\n"+
 		"You can also press **Reject** on the page and give a reason. "+
 		"If you did not expect this, ignore it.",
-		notify.Escape(f.Base.Host, 100), n, step, reason, expires.Format("15:04:05"), short, link)
+		notify.Escape(f.Base.Host, 100), n, step, reason, expires.Format("15:04:05"), short, codeNotes(unlockOn, sealOn), link)
+}
+
+// codeNotes tells the person which codes they will be asked for. The codes themselves are never in a message: they are
+// in the person's authenticator.
+func codeNotes(unlockOn, sealOn bool) string {
+	var b strings.Builder
+	if unlockOn {
+		b.WriteString("- **Unlock code** needed: the details of this login are encrypted in the link. Type the code from your authenticator (the long-period one) in the page to read them.\n")
+	}
+	if sealOn {
+		b.WriteString("- **Sealing code** needed: the page also asks for the short-period code from your authenticator and seals what you type with it.\n")
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // HostPort is a small helper for tests.

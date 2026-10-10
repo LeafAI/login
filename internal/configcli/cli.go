@@ -6,6 +6,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/configedit"
@@ -22,6 +23,8 @@ type Env struct {
 	ReadSecret func() (string, error) // no-echo reader for secrets; nil reads a plain line
 	// SendTest posts a test message through the DingTalk robot (nil: the wizard does not offer it).
 	SendTest func(webhook, secret, keyword string, mobiles []string) error
+	// Now is the clock (nil: the real one); tests fix it so that codes are predictable.
+	Now func() time.Time
 }
 
 const usage = `usage: login config <command> [-config file]
@@ -35,6 +38,7 @@ const usage = `usage: login config <command> [-config file]
   get <key>                  print one setting         (-reveal shows secrets)
   set [key [value]]          change one setting; without arguments lists every setting
   unset <key>                remove a setting (the default applies again)
+  totp init|code|status|on|off  the two TOTP factors that protect the link and the credential (see: login config totp)
   path                       print the config file location
 
 Every change is checked before it is saved. The previous file is kept as config.yaml.bak and comments are preserved.`
@@ -63,6 +67,8 @@ func Run(args []string, env Env) int {
 		err = cmdInit(env)
 	case "site":
 		err = cmdSite(env, rest)
+	case "totp":
+		err = cmdTOTP(env, rest)
 	default:
 		fmt.Fprintf(env.Err, "login config: unknown command %q\n\n%s\n", cmd, usage)
 		return 2

@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LeafAI/login/internal/site"
 	"github.com/LeafAI/login/internal/site/sitetest"
@@ -138,7 +140,9 @@ func (f *fakeKS) webLoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimPrefix(r.URL.Path, "/oauth/login/") == "ldap" && in.Username == "alice" && in.Password == "pw" {
 		http.SetCookie(w, &http.Cookie{Name: "token", Value: "AT", Path: "/", HttpOnly: true})
-		http.SetCookie(w, &http.Cookie{Name: "expire", Value: "1791622193618", Path: "/", HttpOnly: true})
+		// Two hours from now, in milliseconds since the epoch, like the console's own cookie. It must be relative: a fixed
+		// timestamp passes today and fails the day it falls into the past (the driver rightly refuses an expired token).
+		http.SetCookie(w, &http.Cookie{Name: "expire", Value: strconv.FormatInt(time.Now().Add(2*time.Hour).UnixMilli(), 10), Path: "/", HttpOnly: true})
 		http.SetCookie(w, &http.Cookie{Name: "refreshToken", Value: "RT", Path: "/", HttpOnly: true})
 		http.Redirect(w, r, "/", http.StatusFound)
 		return

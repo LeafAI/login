@@ -24,6 +24,10 @@ type Policy struct {
 	DDLAllowed      bool         `json:"archery_ddl_allowed"`
 	AuditEnabled    bool         `json:"audit_enabled"`
 	HumanTTLSeconds int          `json:"human_step_ttl_seconds"`
+	// LinkUnlockRequired: the person must type a long-period code in the page to read the details of a login.
+	LinkUnlockRequired bool `json:"link_unlock_required"`
+	// SealingCodeRequired: the person must type a short-period code in the page, and what they type is sealed with it.
+	SealingCodeRequired bool `json:"sealing_code_required"`
 }
 
 // PolicyLimits mirrors the `limits:` config section.
@@ -43,7 +47,8 @@ func (s *Server) policy() Policy {
 		Limits: PolicyLimits{PerSite: l.PerSite, Total: l.Total,
 			WindowSeconds: int(l.Window.Seconds()), RejectCooldownSeconds: int(l.RejectCooldown.Seconds())},
 		DDLAllowed: s.cfg.Archery.DDLAllowed(), AuditEnabled: s.cfg.Audit.On(),
-		HumanTTLSeconds: int(s.cfg.Web.TTL.Seconds()),
+		HumanTTLSeconds:    int(s.cfg.Web.TTL.Seconds()),
+		LinkUnlockRequired: s.linkTOTP, SealingCodeRequired: s.sealTOTP,
 	}
 }
 

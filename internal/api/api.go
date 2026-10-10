@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/LeafAI/login/internal/keyring"
+	"github.com/LeafAI/login/internal/seal"
 )
 
 const (
@@ -33,6 +34,15 @@ const (
 	StateRejected  = "rejected"
 	StateNextRound = "next_round"
 )
+
+// Envelope is what the OpenPGP layer carries: the submission sealed under the round's one-shot password
+// (AES-256-GCM, see package seal) and the nonce that is bound into the seal. The nonce is repeated in the clear
+// inside the OpenPGP layer only so that the server knows what the seal was bound to; the seal fails to open if it
+// was swapped.
+type Envelope struct {
+	Sealed string `json:"sealed"`
+	Nonce  string `json:"nonce"`
+}
 
 // Submission is the decrypted content of one round.
 type Submission struct {
@@ -51,6 +61,17 @@ type Status struct {
 	Message string `json:"message,omitempty"`
 }
 
+// Factor is a second secret that the person holds in their authenticator (a long-period TOTP code) and that is mixed
+// into the key of every seal. The server never receives the code: it computes the codes that are valid now and tries
+// them as keys, so a submission sealed under any other code simply does not open.
+type Factor interface {
+	// Window returns the codes of every window between from and to: the person reads the code some time after the link
+	// was made and the submission arrives later still, so all of those windows' codes may be the one that was used.
+	Window(from, to time.Time) []string
+	// Digits is the length of a code, announced to the page so that it can check what the person typed.
+	Digits() int
+}
+
 type Server struct {
 	key *keyring.Key
 	srv *http.Server
@@ -60,6 +81,26 @@ type Server struct {
 	rounds map[string]*Round
 	nonces map[string]struct{}
 	now    func() time.Time
+
+	factor Factor // nil: seals need no second factor
+}
+
+// SetFactor requires every submission to be sealed with the second factor too. Without it, plain seals are accepted;
+// with it, ONLY factor seals are, so the factor cannot be skipped.
+func (s *Server) SetFactor(f Factor) {
+	s.mu.Lock()
+	s.factor = f
+	s.mu.Unlock()
+}
+
+// FactorDigits is the code length of the configured factor, or 0 when there is none.
+func (s *Server) FactorDigits() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.factor == nil {
+		return 0
+	}
+	return s.factor.Digits()
 }
 
 func NewServer(key *keyring.Key) *Server {
@@ -89,8 +130,14 @@ func (s *Server) Close() {
 // Round is one authentication step (login, totp, ...).
 type Round struct {
 	Token string
+	Site  string
 	Mode  string
 	N     int
+
+	// password is the round's one-shot seal password (see package seal). It is generated with the round, travels only
+	// in the link, and is wiped as soon as the round has been used.
+	password []byte
+	made     time.Time // when the link of this round was made
 
 	mu       sync.Mutex
 	status   Status
@@ -101,15 +148,39 @@ type Round struct {
 	onFinalRead func()
 }
 
-// NewRound registers a new round with a fresh random token.
-func (s *Server) NewRound(mode string, n int) *Round {
+// NewRoundFor registers a new round for a site with a fresh random token and a fresh one-shot seal password.
+func (s *Server) NewRoundFor(site, mode string, n int) *Round {
+	return s.NewRoundAt(site, mode, n, s.now())
+}
+
+// NewRoundAt is NewRoundFor with the moment the round's link was made (the start of the span of codes to try).
+func (s *Server) NewRoundAt(site, mode string, n int, made time.Time) *Round {
 	var b [16]byte
 	rand.Read(b[:])
-	r := &Round{Token: hex.EncodeToString(b[:]), Mode: mode, N: n, ch: make(chan Submission, 1), status: Status{State: StateWaiting}}
+	pw, err := seal.NewPassword()
+	if err != nil {
+		panic(err) // the system's random source is broken: nothing safe can be done
+	}
+	r := &Round{Token: hex.EncodeToString(b[:]), Site: site, Mode: mode, N: n, password: pw, made: made,
+		ch: make(chan Submission, 1), status: Status{State: StateWaiting}}
 	s.mu.Lock()
 	s.rounds[r.Token] = r
 	s.mu.Unlock()
 	return r
+}
+
+// Password returns the round's one-shot seal password, for the link. It is empty once the round has been used.
+func (r *Round) Password() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.password
+}
+
+// wipe destroys the one-shot password: it has done its job once the round's submission was accepted.
+func (r *Round) wipe() {
+	r.mu.Lock()
+	seal.Wipe(r.password)
+	r.mu.Unlock()
 }
 
 // Wait blocks until the round receives a valid submission or ctx ends.
@@ -222,13 +293,25 @@ func (s *Server) submit(w http.ResponseWriter, req *http.Request, r *Round) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "read failed"})
 		return
 	}
-	plain, err := s.key.Decrypt(body)
+	outer, err := s.key.Decrypt(body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot decrypt (wrong public key?)"})
 		return
 	}
+	s.mu.Lock()
+	factor := s.factor
+	s.mu.Unlock()
+	plain, ok := r.open(outer, factor, s.now())
+	zero(outer)
+	if !ok {
+		// One answer for every way a seal can fail (not sealed, wrong password, other round or site, tampering), so
+		// that a probing client learns nothing about which layer rejected it.
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "submission refused"})
+		return
+	}
 	var sub Submission
 	if err := json.Unmarshal(plain, &sub); err != nil {
+		zero(plain)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed payload"})
 		return
 	}
@@ -247,8 +330,34 @@ func (s *Server) submit(w http.ResponseWriter, req *http.Request, r *Round) {
 	r.done = true
 	r.status = Status{State: StateWorking}
 	r.mu.Unlock()
+	r.wipe()
 	r.ch <- sub
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// open takes the OpenPGP-decrypted envelope and opens the seal under this round's password, bound to this round's
+// site, step and number and to the envelope's nonce. It reports false for anything but a valid seal for this round.
+func (r *Round) open(outer []byte, factor Factor, now time.Time) ([]byte, bool) {
+	made := r.made
+	var env Envelope
+	if err := json.Unmarshal(outer, &env); err != nil || env.Sealed == "" || env.Nonce == "" {
+		return nil, false
+	}
+	r.mu.Lock()
+	pw := r.password
+	r.mu.Unlock()
+	c := seal.Context{Site: r.Site, Mode: r.Mode, Round: r.N, Nonce: env.Nonce}
+	var plain []byte
+	var err error
+	if factor != nil {
+		plain, err = seal.OpenWithFactor(pw, factor.Window(made, now), c, env.Sealed)
+	} else {
+		plain, err = seal.Open(pw, c, env.Sealed)
+	}
+	if err != nil {
+		return nil, false
+	}
+	return plain, true
 }
 
 func (s *Server) validate(req *http.Request, r *Round, sub *Submission) string {
