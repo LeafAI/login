@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src https: http:; base-uri 'none'; form-action 'none'">
+<title>login</title>
+<style>
+  :root { color-scheme: light dark; --fg:#1a1a1a; --bg:#fff; --muted:#666; --line:#d0d0d0; --accent:#1f6feb; --bad:#c62828; --ok:#2e7d32; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e8e8e8; --bg:#161616; --muted:#9a9a9a; --line:#3a3a3a; --accent:#58a6ff; --bad:#ff7b72; --ok:#56d364; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,sans-serif; }
+  main { max-width:30rem; margin:0 auto; padding:1.5rem 1rem 3rem; }
+  h1 { font-size:1.25rem; margin:0 0 .25rem; }
+  .sub { color:var(--muted); margin:0 0 1rem; font-size:.9rem; }
+  dl { display:grid; grid-template-columns:7rem 1fr; gap:.25rem .75rem; font-size:.85rem; margin:0 0 1.25rem; padding:.75rem; border:1px solid var(--line); border-radius:.5rem; }
+  dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; font-family:ui-monospace,monospace; }
+  label { display:block; margin:.75rem 0 .25rem; font-size:.9rem; }
+  input, textarea { width:100%; box-sizing:border-box; padding:.55rem .6rem; font:inherit; color:inherit; background:transparent; border:1px solid var(--line); border-radius:.4rem; }
+  .row { display:flex; gap:.5rem; margin-top:1.25rem; }
+  button { font:inherit; padding:.55rem 1rem; border-radius:.4rem; border:1px solid var(--line); background:transparent; color:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; flex:1; }
+  button[disabled] { opacity:.5; cursor:default; }
+  #msg { margin-top:1rem; font-size:.9rem; white-space:pre-wrap; }
+  .bad { color:var(--bad); } .ok { color:var(--ok); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">login</h1>
+  <p class="sub" id="sub">Credentials are encrypted in this page before they leave your browser.</p>
+
+  <section id="paste" hidden>
+    <label for="link">Paste the login link from DingTalk</label>
+    <textarea id="link" rows="4" spellcheck="false" autocomplete="off"></textarea>
+    <div class="row"><button class="primary" id="use-link" type="button">Continue</button></div>
+  </section>
+
+  <section id="main" hidden>
+    <dl>
+      <dt>Site</dt><dd id="d-site"></dd>
+      <dt>Step</dt><dd id="d-mode"></dd>
+      <dt>Tunnel host</dt><dd id="d-host"></dd>
+      <dt>Key fingerprint</dt><dd id="d-fpr"></dd>
+    </dl>
+    <form id="form" autocomplete="off">
+      <div id="fields"></div>
+      <div id="reject-box" hidden>
+        <label for="reason">Reason for rejecting (optional, sent to the AI agent)</label>
+        <textarea id="reason" rows="3" maxlength="500"></textarea>
+      </div>
+      <div class="row">
+        <button class="primary" id="submit" type="submit">Submit</button>
+        <button id="reject" type="button">Reject</button>
+      </div>
+    </form>
+  </section>
+  <div id="msg" role="status"></div>
+</main>
+<script src="openpgp.min.js"></script>
+<script src="login.js"></script>
+</body>
+</html>
