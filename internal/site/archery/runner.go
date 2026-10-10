@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/LeafAI/login/internal/notify"
 )
 
 // Errors with stable meaning for the MCP layer.
@@ -110,13 +112,10 @@ func (t *Tracker) Submit(ctx context.Context, c *Client, n Notifier, r SubmitReq
 	}
 	out := &Outcome{Status: "pending", Phase: PhaseAwaitingApproval, WorkflowID: id, WorkflowURL: workflowURL(c.Base, id), Check: rows}
 	if n != nil {
-		preview := r.SQL
-		if len(preview) > 500 {
-			preview = preview[:500] + "..."
-		}
 		text := fmt.Sprintf("### SQL approval needed: %s\n\n- **Instance / DB**: %s / %s\n- **Requested by AI agent**: %s\n\n```sql\n%s\n```\n\n[Open workflow #%d in Archery](%s)\n\nAfter approval the SQL is executed automatically.",
-			r.Title, r.Instance, r.Database, orNone(r.Remark), preview, id, out.WorkflowURL)
-		if err := n.Markdown(ctx, "SQL approval: "+r.Title, text); err != nil {
+			notify.Escape(r.Title, 50), notify.Escape(r.Instance, 80), notify.Escape(r.Database, 80), orNone(notify.Escape(r.Remark, 200)),
+			notify.CodeBlock(r.SQL, 500), id, out.WorkflowURL)
+		if err := n.Markdown(ctx, "SQL approval: "+notify.Escape(r.Title, 50), text); err != nil {
 			out.Reason = "workflow submitted but the DingTalk notification failed: " + err.Error()
 		}
 	}

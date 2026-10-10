@@ -17,6 +17,7 @@ import (
 
 	"github.com/LeafAI/login/internal/api"
 	"github.com/LeafAI/login/internal/keyring"
+	"github.com/LeafAI/login/internal/notify"
 	"github.com/LeafAI/login/internal/site"
 	"github.com/LeafAI/login/internal/web"
 )
@@ -308,7 +309,7 @@ func message(f *Flow, mode string, n int, link, fpr string, expires time.Time) s
 	if step == "" {
 		step = mode
 	}
-	reason := f.Reason
+	reason := notify.Escape(f.Reason, 200)
 	if reason == "" {
 		reason = "(not given)"
 	}
@@ -321,7 +322,7 @@ func message(f *Flow, mode string, n int, link, fpr string, expires time.Time) s
 		"[Open the login page](%s)\n\n"+
 		"You can also press **Reject** on the page and give a reason. "+
 		"If you did not expect this, ignore it.",
-		f.Base.Host, n, step, reason, expires.Format("15:04:05"), short, link)
+		notify.Escape(f.Base.Host, 100), n, step, reason, expires.Format("15:04:05"), short, link)
 }
 
 // HostPort is a small helper for tests.

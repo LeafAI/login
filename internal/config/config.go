@@ -19,12 +19,19 @@ type Config struct {
 	Keys     Keys     `yaml:"keys"`
 	Web      Web      `yaml:"web"`
 	MCP      MCP      `yaml:"mcp"`
+	Security Security `yaml:"security"`
 	// Aliases maps a hostname (or host:port) to a site driver name, for sites whose hostname does not
 	// hint at the product, e.g. "es.corp.example": kibana.
 	Aliases map[string]string `yaml:"aliases"`
 	Archery Archery           `yaml:"archery"`
 	// Sites defines extra websites with the declarative generic driver.
 	Sites []generic.Spec `yaml:"sites"`
+}
+
+type Security struct {
+	// AllowedHosts, when non-empty, restricts which sites the agent may log in to. Entries are
+	// glob patterns matched against "host" and "host:port", e.g. "*.corp.example".
+	AllowedHosts []string `yaml:"allowed_hosts"`
 }
 
 type MCP struct {

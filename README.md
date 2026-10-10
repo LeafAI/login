@@ -25,6 +25,13 @@ claude mcp add login -- login          # or add "login" to any MCP client's serv
 The static page is served by GitHub Pages (version-pinned) or from your disk (`login page [dir]`); the tunnel
 carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_TOOLS.md` (tool schemas).
 
+## Security notes
+
+- Agent-supplied text (`reason`, SQL title/remark/SQL) is escaped before it is put in DingTalk markdown, so it
+  cannot add links or formatting to the message the human acts on.
+- `security.allowed_hosts` limits which sites the agent can target.
+- Returned cookies/tokens are secrets handed to the agent by design; `login_sessions` never shows them.
+
 ## First run
 
 ```
@@ -61,6 +68,8 @@ archery:
   allow_ddl: true            # false rejects CREATE/ALTER/DROP/TRUNCATE/RENAME
   default_group: dba         # Archery resource group when a call gives none
   wait_timeout: 30m          # default approval timeout
+security:
+  allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
 aliases:                     # hostnames that do not hint at the product
   es.corp.example: kibana
   apm.corp.example: skywalking

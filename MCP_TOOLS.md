@@ -42,6 +42,7 @@ matching the output schema plus a short text summary. Failures are `isError: tru
 { "code": "string", "message": "string", "retryable": false, "hint": "string?" }
 ```
 Codes: `invalid_argument`, `unsupported_site`, `human_timeout` (nobody completed a round before the TTL),
+`host_not_allowed` (the URL's host is outside `security.allowed_hosts`),
 `user_rejected` (the human pressed Reject on the page; `message` carries their optional reason, not retryable),
 `bad_credentials`, `login_rejected` (site refused, e.g. account locked / captcha), `tunnel_unavailable`,
 `notify_failed` (DingTalk), `site_unreachable`, `ddl_disabled`, `sql_check_failed`, `archery_error`,

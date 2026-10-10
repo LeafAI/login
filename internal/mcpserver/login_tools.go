@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw,
 	base, terr := baseOf(raw)
 	if terr != nil {
 		return nil, terr
+	}
+	if !s.hostAllowed(base) {
+		e := errf("host_not_allowed", false, "%s is not in security.allowed_hosts", base.Host)
+		e.Hint = "Ask the user to allow this host in the login config; do not try other spellings of it."
+		return nil, e
 	}
 	if siteName == "" {
 		siteName = s.alias(base)
@@ -247,4 +253,19 @@ func (s *Server) alias(base *url.URL) string {
 		}
 	}
 	return ""
+}
+
+// hostAllowed applies security.allowed_hosts (empty means every host is allowed).
+func (s *Server) hostAllowed(base *url.URL) bool {
+	if len(s.cfg.Security.AllowedHosts) == 0 {
+		return true
+	}
+	for _, pat := range s.cfg.Security.AllowedHosts {
+		for _, h := range []string{base.Host, base.Hostname()} {
+			if ok, _ := path.Match(strings.ToLower(pat), strings.ToLower(h)); ok {
+				return true
+			}
+		}
+	}
+	return false
 }

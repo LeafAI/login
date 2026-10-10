@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,5 +103,17 @@ func TestSingleFlightAndCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancel did not end the flow")
+	}
+}
+
+func TestMessageEscapesAgentText(t *testing.T) {
+	u, _ := url.Parse("https://site.example")
+	f := &Flow{Base: u, Reason: "[Click here to confirm](https://evil.example)\n# urgent"}
+	msg := message(f, "login", 1, "https://page.example/#v=1", "ABCDEF0123456789ABCDEF", time.Now())
+	if strings.Contains(msg, "](https://evil") {
+		t.Errorf("agent-supplied link survived:\n%s", msg)
+	}
+	if !strings.Contains(msg, "[Open the login page](https://page.example/#v=1)") {
+		t.Errorf("real link missing:\n%s", msg)
 	}
 }
