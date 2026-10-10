@@ -115,7 +115,7 @@ func TestSingleFlightAndCancel(t *testing.T) {
 func TestMessageEscapesAgentText(t *testing.T) {
 	u, _ := url.Parse("https://site.example")
 	f := &Flow{Base: u, Reason: "[Click here to confirm](https://evil.example)\n# urgent"}
-	msg := message(f, "login", 1, "https://page.example/#v=1", "ABCDEF0123456789ABCDEF", time.Now(), "")
+	msg := message(f, "login", 1, "https://page.example/#v=1", "ABCDEF0123456789ABCDEF", time.Now(), "", false, false)
 	if strings.Contains(msg, "](https://evil") {
 		t.Errorf("agent-supplied link survived:\n%s", msg)
 	}
@@ -681,4 +681,149 @@ func TestTheFinalAnswerIsDeliveredBeforeTheTunnelCloses(t *testing.T) {
 	}
 	resp.Body.Close()
 	waitFor(t, "the tunnel to close after the flush delay", func() bool { return ts.stillOpen() == 0 })
+}
+
+// ---- the two TOTP factors ----
+
+// codeSource is a Factors stand-in: it hands out fixed codes and records the spans it was asked about.
+type codeSource struct {
+	mu     sync.Mutex
+	codes  []string
+	digits int
+	spans  [][2]time.Time
+}
+
+func (c *codeSource) Window(from, to time.Time) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, [2]time.Time{from, to})
+	return c.codes
+}
+func (c *codeSource) Digits() int { return c.digits }
+func (c *codeSource) last() [2]time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.spans[len(c.spans)-1]
+}
+
+func linkOf(msg string) string {
+	i := strings.Index(msg, "](")
+	j := strings.Index(msg[i:], ")")
+	return msg[i+2 : i+j]
+}
+
+// With the unlock factor configured, the DingTalk message carries a link whose secret parameters are encrypted: neither
+// the site, nor the tunnel address, nor the one-shot password is in it.
+func TestTheDingTalkLinkIsEncryptedWithTheUnlockFactor(t *testing.T) {
+	ts := &trackedTunnels{}
+	rec := &recNotifier{}
+	unlock := &codeSource{codes: []string{"11111111", "22222222"}, digits: 8}
+	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: ts,
+		PageURL: "https://page.example/", TTL: 10 * time.Minute, Unlock: unlock})
+	defer m.Close()
+	u, _ := url.Parse("https://gitlab.corp.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "the link", func() bool { return len(rec.all()) == 1 })
+	msg := rec.all()[0]
+	link := linkOf(msg)
+	// The message text names the site on purpose (the person must see at a glance what is being asked); what is hidden
+	// is the LINK: the site, the tunnel address and the one-shot password must not be in it, in any form.
+	for _, leak := range []string{"gitlab", "corp.example", "127.0.0.1", "%2Ft0", "/t1", "site=", "u=", "s="} {
+		if strings.Contains(link, leak) {
+			t.Errorf("the link carries %q: %s", leak, link)
+		}
+	}
+	frag, _ := url.ParseQuery(link[strings.Index(link, "#")+1:])
+	if frag.Get("e") == "" || frag.Get("c") != "8" || frag.Get("u") != "" || frag.Get("s") != "" {
+		t.Errorf("the link is not encrypted as expected: %v", frag)
+	}
+	// the candidates cover the whole life of the link: from now to its expiry (the person may open it any time then)
+	span := unlock.last()
+	if d := span[1].Sub(span[0]); d < 9*time.Minute || d > 11*time.Minute {
+		t.Errorf("the unlock codes cover %v, want about the link's lifetime (10 minutes)", d)
+	}
+	if !strings.Contains(msg, "Unlock code") {
+		t.Errorf("the message must tell the person that an unlock code is needed:\n%s", msg)
+	}
+}
+
+// Without it the link is a plain one and says nothing about codes.
+func TestWithoutTheUnlockFactorTheLinkIsPlain(t *testing.T) {
+	rec := &recNotifier{}
+	m := manager(t, rec, &trackedTunnels{}, time.Minute)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "the link", func() bool { return len(rec.all()) == 1 })
+	msg := rec.all()[0]
+	frag, _ := url.ParseQuery(linkOf(msg)[strings.Index(linkOf(msg), "#")+1:])
+	if frag.Get("e") != "" || frag.Get("site") == "" {
+		t.Errorf("a plain link was expected: %v", frag)
+	}
+	if strings.Contains(msg, "Unlock code") || strings.Contains(msg, "Sealing code") {
+		t.Errorf("the message mentions codes that are not in use:\n%s", msg)
+	}
+}
+
+// The sealing factor is installed on the round's server, and the link announces its length.
+func TestTheSealingFactorIsRequiredAndAnnounced(t *testing.T) {
+	rec := &recNotifier{}
+	seal := &codeSource{codes: []string{"123456"}, digits: 6}
+	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: &trackedTunnels{},
+		PageURL: "https://page.example/", TTL: time.Minute, Seal: seal})
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "the link", func() bool { return len(rec.all()) == 1 })
+	frag, _ := url.ParseQuery(linkOf(rec.all()[0])[strings.Index(linkOf(rec.all()[0]), "#")+1:])
+	if frag.Get("t") != "6" {
+		t.Errorf("the link must announce the sealing code length, got t=%q", frag.Get("t"))
+	}
+	if f.srv == nil || f.srv.FactorDigits() != 6 {
+		t.Errorf("the server must require the sealing factor")
+	}
+	if !strings.Contains(rec.all()[0], "Sealing code") {
+		t.Errorf("the message must tell the person that a sealing code is needed:\n%s", rec.all()[0])
+	}
+}
+
+// A factor that is switched on but cannot do its job must stop the login: sending a plain link would make the person
+// believe the parameters are hidden. Here the source offers no codes at all.
+func TestAnUnusableUnlockFactorSendsNoLink(t *testing.T) {
+	rec := &recNotifier{}
+	ts := &trackedTunnels{}
+	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: ts,
+		PageURL: "https://page.example/", TTL: time.Minute, Unlock: &codeSource{codes: nil, digits: 8}})
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	select {
+	case <-f.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the flow did not stop")
+	}
+	if f.Result().Err == nil {
+		t.Fatal("the login succeeded without an unlock code")
+	}
+	if len(rec.all()) != 0 {
+		t.Errorf("%d messages sent; a link must not be sent when its protection cannot be applied", len(rec.all()))
+	}
+	waitFor(t, "the tunnel to be closed", func() bool { return ts.stillOpen() == 0 })
+}
+
+// With both factors, each does its own job and neither is confused with the other.
+func TestBothFactorsTogether(t *testing.T) {
+	rec := &recNotifier{}
+	unlock := &codeSource{codes: []string{"11111111"}, digits: 8}
+	seal := &codeSource{codes: []string{"222222"}, digits: 6}
+	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: &trackedTunnels{},
+		PageURL: "https://page.example/", TTL: time.Minute, Unlock: unlock, Seal: seal})
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "the link", func() bool { return len(rec.all()) == 1 })
+	frag, _ := url.ParseQuery(linkOf(rec.all()[0])[strings.Index(linkOf(rec.all()[0]), "#")+1:])
+	if frag.Get("c") != "8" || frag.Get("t") != "6" {
+		t.Errorf("c=%q t=%q, want the unlock length 8 and the sealing length 6", frag.Get("c"), frag.Get("t"))
+	}
 }
