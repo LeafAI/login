@@ -27,6 +27,8 @@ Human clicks the link; the page (served by GitHub Pages, never by the tunnel) pa
   6. page reads mode/key/URL from the fragment, renders the matching form itself; browser
      PGP-encrypts {fields, nonce, ts, mode, round} to the key from the link; POST <submit URL>
      (the page then polls <status URL>)
+  The human may instead press **Reject** (with an optional reason); the page sends an encrypted
+  `{action:"reject", reason}` through the same API and the agent gets `user_rejected` + the reason.
   If the site needs another factor (e.g. TOTP), the driver starts a NEW round: a new token and a
   new DingTalk message, handled exactly like step 5-6 with mode=totp.
   7. server decrypts, validates nonce/ts/token, answers 200, shuts down tunnel+server
@@ -143,7 +145,7 @@ Static page (`web/login.html`, single file with vendored `openpgp.js`, no extern
 
 API (bound to 127.0.0.1, reachable only via the tunnel; two routes per round):
 - `POST /<t>/submit?mode=<m>&round=<n>` -> body is an armored PGP message; plaintext JSON
-  `{fields, nonce, ts, mode, round}`. Rejected on wrong token, mismatched mode/round (inside vs.
+  `{action: submit|reject, fields, reason, nonce, ts, mode, round}`. Rejected on wrong token, mismatched mode/round (inside vs.
   URL), reused nonce, ts skew > 2 min, or a second submission. The token is single-round.
 - `GET  /<t>/status` -> `{state: waiting|working|done|failed|next_round, message}`; `next_round`
   tells the page to wait for the next DingTalk message.
@@ -292,6 +294,8 @@ MCP registration: `claude mcp add login -- login`.
    The per-round parameters (mode, key, URL) are carried in the **fragment** of a GitHub Pages link,
    so the human just clicks it; no manual copy/paste.
 8. Repo has a `master` branch (created); it is the PR base.
+9. The form has a Reject button with an optional reason (encrypted like a submission) -> `user_rejected` error.
+10. Every driver detects a second-factor requirement and launches another round (`totp`).
 
 Still open: publishing the static page needs GitHub Pages enabled for the repo (source: GitHub
 Actions, deploying `web/` on each release tag). That is a repo setting for the owner.

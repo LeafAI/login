@@ -42,8 +42,9 @@ matching the output schema plus a short text summary. Failures are `isError: tru
 { "code": "string", "message": "string", "retryable": false, "hint": "string?" }
 ```
 Codes: `invalid_argument`, `unsupported_site`, `human_timeout` (nobody completed a round before the TTL),
+`user_rejected` (the human pressed Reject on the page; `message` carries their optional reason, not retryable),
 `bad_credentials`, `login_rejected` (site refused, e.g. account locked / captcha), `tunnel_unavailable`,
-`notify_failed` (DingTalk), `site_unreachable`, `ddl_disabled`, `sql_check_failed`, `workflow_rejected`,
+`notify_failed` (DingTalk), `site_unreachable`, `ddl_disabled`, `sql_check_failed`, `archery_error`,
 `workflow_not_found`, `internal`.
 
 **Annotations** (MCP tool hints): `login*`: `openWorldHint: true`; `login_sites`/`login_sessions`/
@@ -131,13 +132,12 @@ site); it does not log out on the server unless the driver supports it (`server_
 
 ## 6. `archery_instances`
 
-Input: `{ "url": uri (required), "site": string? }` (login performed implicitly).
+Input: `{ "url": uri (required), "site": string?, "instance": string? }` (login performed implicitly; with `instance`, that instance's `databases` are listed too).
 Output
 ```jsonc
-{ "instances":[ { "name":"prod-mysql-01","type":"mysql","db_type":"mysql",
-                  "databases":["orders","users"],      // present when listable
-                  "can_query":true, "can_submit":true } ],
-  "resource_groups":["dba","dev"] }
+{ "instances":[ { "name":"prod-mysql-01","type":"master","db_type":"mysql" } ],
+  "databases":["orders","users"],                 // only when `instance` was given
+  "login": { ...pending login... } }              // only when a human login is still pending
 ```
 
 ## 7. `archery_query`
@@ -194,8 +194,11 @@ Output (`oneOf` by `status`)
   "workflow_id":123, "workflow_url":"...", "check":[ {"sequence":1,"level":"warning","message":"..."} ],
   "next_tool":"archery_wait" }
 
-// status = "rejected" | "aborted"
-{ "status":"rejected","workflow_id":123,"by":"lisi","reason":"..." }
+// status = "aborted"  (rejected or cancelled in Archery, or approval timed out and we cancelled it)
+{ "status":"aborted","workflow_id":123,"reason":"..." }
+
+// status = "pending", phase = "login"  (the Archery login itself still waits for the human)
+{ "status":"pending","phase":"login","login_id":"lg_...","next_tool":"login_wait" }
 ```
 Pre-submit check findings of level `error` abort with `sql_check_failed` (the `check` list is in the
 error `hint`/structured data); `warning` is submitted and reported.
@@ -212,7 +215,7 @@ restart; an already-executed workflow just returns its result.
 Input: `{ "workflow_id": integer, "url": uri }` (both required).
 Output
 ```jsonc
-{ "workflow_id":123,"title":"...","status":"awaiting_approval"|"approved"|"executing"|"done"|"failed"|"rejected"|"aborted",
+{ "workflow_id":123,"title":"...","status":"awaiting_approval"|"approved"|"executing"|"done"|"failed"|"aborted"|"check_failed",
   "status_text":"<Archery's own wording>","submitter":"...","instance":"...","database":"...",
   "created_at":"...","review_history":[ {"stage":"...","by":"...","result":"...","at":"..."} ],
   "results":[ ... ]  /* same item shape as archery_run_sql, when executed */ }
@@ -231,9 +234,15 @@ Refuses if already executing/executed (`invalid_argument`).
 | `archery_run_sql` | one after submit: title, instance/db, SQL summary (first 500 chars), Archery workflow link — to the same robot (approval itself happens in Archery) |
 | others | none |
 
-## 13. Open points
+## 13. Notes
 
-1. `max_block_seconds` default 50 s is tuned for ~60 s client timeouts; make it larger if your MCP
+- `resource_group` is required by Archery's submit; set `archery.default_group` in the config to omit it per call.
+- `archery_workflow_status` pages through the 200 most recent workflows visible to the user.
+- The Archery endpoints are exercised against a fake server only; see the README's verification section.
+
+## 14. Decisions on the earlier open points
+
+1. (agreed) `max_block_seconds` default 50 s is tuned for ~60 s client timeouts; make it larger if your MCP
    client allows longer calls. OK?
 2. `login` output always includes raw secrets (by design). Add an opt-in `redact: true` that returns
    only `cookie_header` presence/metadata for dry runs? (Default stays unredacted.)
