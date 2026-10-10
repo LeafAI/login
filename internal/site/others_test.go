@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 
@@ -128,5 +131,127 @@ func TestKibanaInspect(t *testing.T) {
 	out, err := in.Inspect(context.Background(), mustURL(srv.URL), srv.Client())
 	if err != nil || !strings.Contains(strings.Join(out, " "), `name "basic1"`) {
 		t.Errorf("%v %v", out, err)
+	}
+}
+
+// kibana7Fake is Kibana 7.9.3 as seen on a live site (browser capture and probes): POST /internal/security/login
+// takes a flat {"username","password"} and rejects providerType/providerName/currentURL/params as unknown keys
+// (400), a wrong password is 401, and the login page carries the version in its injected metadata.
+func kibana7Fake(posts *[]string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			w.Write([]byte(`<html><kbn-injected-metadata data="{&quot;version&quot;:&quot;7.9.3&quot;,&quot;buildNumber&quot;:34038}"></kbn-injected-metadata></html>`))
+		case "/internal/security/login_state":
+			w.Write([]byte(`{"allowLogin":true,"layout":"form","selector":{"enabled":false,"providers":[{"type":"basic","name":"basic","usesLoginForm":true}]}}`))
+		case "/internal/security/login":
+			raw, _ := io.ReadAll(r.Body)
+			var all map[string]any
+			json.Unmarshal(raw, &all)
+			keys := make([]string, 0, len(all))
+			for k := range all {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			*posts = append(*posts, strings.Join(keys, ","))
+			for _, k := range []string{"providerType", "providerName", "currentURL", "params"} {
+				if _, bad := all[k]; bad {
+					w.WriteHeader(400)
+					fmt.Fprintf(w, `{"statusCode":400,"error":"Bad Request","message":"[request body.%s]: definition for this key is missing"}`, k)
+					return
+				}
+			}
+			if _, ok := all["username"].(string); !ok {
+				w.WriteHeader(400)
+				w.Write([]byte(`{"statusCode":400,"error":"Bad Request","message":"[request body.username]: expected value of type [string] but got [undefined]"}`))
+				return
+			}
+			if all["username"] != "alice" || all["password"] != "pw" {
+				w.WriteHeader(401)
+				w.Write([]byte(`{"statusCode":401,"error":"Unauthorized","message":"[security_exception] unable to authenticate user"}`))
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "sid", Value: "S", Path: "/"})
+			w.WriteHeader(204)
+		case "/internal/security/me":
+			if c, err := r.Cookie("sid"); err != nil || c.Value != "S" {
+				w.WriteHeader(401)
+				return
+			}
+			w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+func TestKibana7LoginUsesTheFlatBody(t *testing.T) {
+	var posts []string
+	srv := httptest.NewServer(kibana7Fake(&posts))
+	defer srv.Close()
+	a := answers("")
+	s, err := run(t, "kibana", srv, a)
+	if err != nil {
+		t.Fatalf("a Kibana 7.9.3 login the browser accepts was refused: %v", err)
+	}
+	if len(s.Cookies) != 1 || s.Cookies[0].Name != "sid" {
+		t.Errorf("session cookie: %+v", s.Cookies)
+	}
+	if len(posts) != 1 || posts[0] != "password,username" {
+		t.Errorf("login POSTs = %v; Kibana 7.9.3 takes exactly one flat {username,password}", posts)
+	}
+	d, _ := site.Resolve("kibana", mustURL(srv.URL))
+	if err := d.Probe(context.Background(), mustURL(srv.URL), s, srv.Client()); err != nil {
+		t.Errorf("probe: %v", err)
+	}
+}
+
+// When the version cannot be read (a fronting proxy rewrote the page), the 400 that names the unaccepted key is
+// enough to switch format. A 400 is a validation failure before any authentication, so it never counts as a failed
+// login and cannot lock the account.
+func TestKibanaFormatIsLearnedFromTheRejection(t *testing.T) {
+	var posts []string
+	inner := kibana7Fake(&posts)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			w.Write([]byte("<html>no version here</html>"))
+			return
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	if _, err := run(t, "kibana", srv, answers("")); err != nil {
+		t.Fatalf("login with an unreadable version: %v", err)
+	}
+	if len(posts) != 2 || posts[1] != "password,username" {
+		t.Errorf("POSTs = %v, want a rejected nested body then the flat one", posts)
+	}
+}
+
+func TestKibana7WrongPasswordIsBadCredentialsAndDoesNotRetry(t *testing.T) {
+	var posts []string
+	srv := httptest.NewServer(kibana7Fake(&posts))
+	defer srv.Close()
+	bad := &sitetest.Asker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "WRONG"}}}
+	if _, err := run(t, "kibana", srv, bad); !errors.Is(err, site.ErrBadCredentials) {
+		t.Fatalf("wrong password: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Errorf("%d login POSTs; a rejected password must not be sent again (accounts lock)", len(posts))
+	}
+}
+
+func TestKibanaInspectReportsTheVersionAndFormat(t *testing.T) {
+	var posts []string
+	srv := httptest.NewServer(kibana7Fake(&posts))
+	defer srv.Close()
+	d, _ := site.Resolve("kibana", mustURL(srv.URL))
+	out, err := d.(site.Inspector).Inspect(context.Background(), mustURL(srv.URL), srv.Client())
+	joined := strings.Join(out, " ")
+	if err != nil || !strings.Contains(joined, "7.9.3") || !strings.Contains(joined, "flat") {
+		t.Errorf("inspect should say the version and that the flat body is used: %v %v", out, err)
+	}
+	if len(posts) != 0 {
+		t.Errorf("inspecting must not attempt a login: %v", posts)
 	}
 }
