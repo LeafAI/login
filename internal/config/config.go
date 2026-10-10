@@ -2,7 +2,9 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,19 +105,33 @@ func DefaultPath() string {
 
 // Load reads path (a missing file is not an error), applies defaults and env overrides.
 func Load(path string) (*Config, error) {
-	c := &Config{}
 	b, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := yaml.Unmarshal(b, c); err != nil {
-			return nil, err
-		}
-	case !errors.Is(err, os.ErrNotExist):
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return Parse(b, filepath.Dir(path))
+}
+
+// Parse decodes YAML text (empty is fine), applies env overrides and defaults; dir is where relative
+// defaults (keys/, sessions/) live.
+func Parse(b []byte, dir string) (*Config, error) {
+	c := &Config{}
+	if err := yaml.Unmarshal(b, c); err != nil {
 		return nil, err
 	}
 	c.applyEnv()
-	c.applyDefaults(filepath.Dir(path))
+	c.applyDefaults(dir)
 	return c, nil
+}
+
+// ParseStrict reports fields in b that Config does not know (typos); it does not apply defaults.
+func ParseStrict(b []byte) error {
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&Config{}); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 func (c *Config) applyEnv() {

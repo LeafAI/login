@@ -79,3 +79,26 @@ func TestGenericWithTOTP(t *testing.T) {
 		t.Errorf("bad creds: %v", err)
 	}
 }
+
+func TestSpecRoundTripKeepsBodyKinds(t *testing.T) {
+	spec := Spec{Name: "g", MatchHost: "g",
+		Steps: []Step{{Method: "POST", Path: "/login", JSON: map[string]any{"u": "{{username}}"}}},
+		TwoFA: &TwoFA{DetectBody: "otp", Step: Step{Method: "POST", Path: "/otp", Form: map[string]string{"code": "{{code}}"}}},
+		Probe: Probe{Path: "/me"}}
+	b, err := yaml.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, noise := range []string{"{}", "[]", "expect_status: 0"} {
+		if strings.Contains(string(b), noise) {
+			t.Errorf("empty fields must be omitted, found %q in:\n%s", noise, b)
+		}
+	}
+	var back Spec
+	if err := yaml.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.TwoFA.Step.JSON != nil || back.TwoFA.Step.Form["code"] != "{{code}}" {
+		t.Fatalf("the 2FA step must stay a form, got %+v", back.TwoFA.Step)
+	}
+}

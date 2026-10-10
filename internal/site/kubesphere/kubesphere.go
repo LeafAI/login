@@ -47,6 +47,15 @@ func (d *driver) Configure(opts map[string]string) {
 	d.mu.Unlock()
 }
 
+// Options lists the settings `login config` offers for KubeSphere.
+func (*driver) Options() []site.Option {
+	return []site.Option{
+		{Key: "identity_provider", Label: "Which identity provider do your users log in with?",
+			Help:    "auto uses the first LDAP provider KubeSphere publishes; local uses KubeSphere's built-in accounts; or type a provider name.",
+			Choices: []string{"auto", "local"}, Default: "auto", FreeText: true},
+	}
+}
+
 func (d *driver) option(k string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

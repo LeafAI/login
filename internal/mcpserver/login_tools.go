@@ -310,3 +310,6 @@ func Resolve(cfg *config.Config, raw, siteName string) (site.Driver, *url.URL, e
 	}
 	return d, base, nil
 }
+
+// HostAllowed applies security.allowed_hosts to a base URL (an empty list allows every host).
+func HostAllowed(cfg *config.Config, base *url.URL) bool { return hostAllowedBy(cfg, base) }

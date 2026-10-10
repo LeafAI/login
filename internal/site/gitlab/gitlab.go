@@ -46,6 +46,17 @@ func (d *driver) Configure(opts map[string]string) {
 	d.mu.Unlock()
 }
 
+// Options lists the settings `login config` offers for GitLab.
+func (*driver) Options() []site.Option {
+	return []site.Option{
+		{Key: "login_method", Label: "Which accounts do your users sign in with?",
+			Help:    "auto detects an LDAP tab on the sign-in page; standard forces local GitLab accounts; ldap forces the LDAP form.",
+			Choices: []string{"auto", "ldap", "standard"}, Default: "auto"},
+		{Key: "ldap_provider", Label: "LDAP provider name (leave empty to detect it)",
+			Help: "Only needed when the LDAP form posts to something other than the name found on the page, e.g. ldapmain.", FreeText: true},
+	}
+}
+
 func (d *driver) option(k string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

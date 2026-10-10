@@ -18,34 +18,34 @@ import (
 type Step struct {
 	Method       string            `yaml:"method"`
 	Path         string            `yaml:"path"`
-	Form         map[string]string `yaml:"form"`
-	JSON         map[string]any    `yaml:"json"`
-	Headers      map[string]string `yaml:"headers"`
-	ExpectStatus []int             `yaml:"expect_status"`
+	Form         map[string]string `yaml:"form,omitempty"`
+	JSON         map[string]any    `yaml:"json,omitempty"`
+	Headers      map[string]string `yaml:"headers,omitempty"`
+	ExpectStatus []int             `yaml:"expect_status,omitempty"`
 }
 
 type TwoFA struct {
-	DetectBody string `yaml:"detect_body"` // regex on the last response body
-	Step       Step   `yaml:"step"`        // uses {{code}}
+	DetectBody string `yaml:"detect_body,omitempty"` // regex on the last response body
+	Step       Step   `yaml:"step,omitempty"`        // uses {{code}}
 }
 
 type Collect struct {
-	Tokens  map[string]string `yaml:"tokens"`  // name -> dotted JSON path in the last response
-	Headers map[string]string `yaml:"headers"` // header -> template, {{token:name}} allowed
+	Tokens  map[string]string `yaml:"tokens,omitempty"`  // name -> dotted JSON path in the last response
+	Headers map[string]string `yaml:"headers,omitempty"` // header -> template, {{token:name}} allowed
 }
 
 type Probe struct {
 	Path         string `yaml:"path"`
-	ExpectStatus int    `yaml:"expect_status"`
+	ExpectStatus int    `yaml:"expect_status,omitempty"`
 }
 
 type Spec struct {
 	Name      string  `yaml:"name"`
-	MatchHost string  `yaml:"match_host"`
+	MatchHost string  `yaml:"match_host,omitempty"`
 	Steps     []Step  `yaml:"steps"`
-	TwoFA     *TwoFA  `yaml:"twofa"`
-	Collect   Collect `yaml:"collect"`
-	Probe     Probe   `yaml:"probe"`
+	TwoFA     *TwoFA  `yaml:"twofa,omitempty"`
+	Collect   Collect `yaml:"collect,omitempty"`
+	Probe     Probe   `yaml:"probe,omitempty"`
 }
 
 type driver struct {
