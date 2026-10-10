@@ -20,12 +20,12 @@ Agent ──login(url)──▶ MCP server (stdio)
   2. take a GPG key from the pool (each key: <= 8 uses and <= 24 h, then retired)
   3. start a one-shot JSON API server on 127.0.0.1:<random port> (serves NO html)
   4. start SSH tunnel (provider chain, first one that yields an https URL wins)
-  5. DingTalk robot ──▶ human: for the current round, a "connection string" = full submit URL
-     (tunnel + per-round token + mode) + armored PUBLIC KEY, plus the address of the trusted static
-     page (never served through the tunnel)
-Human opens the trusted static page (hosted by us / saved locally) and PASTES the connection string
-  6. page reads the mode from the pasted string, renders the matching form itself; browser
-     PGP-encrypts {fields, nonce, ts, mode, round} to the pasted key; POST <submit URL>
+  5. DingTalk robot ──▶ human: for the current round, ONE link to the trusted static page (GitHub
+     Pages) whose URL *fragment* carries everything: submit URL (tunnel + per-round token), mode,
+     round, site and the PUBLIC KEY. Nothing is copied by hand.
+Human clicks the link; the page (served by GitHub Pages, never by the tunnel) parses the fragment
+  6. page reads mode/key/URL from the fragment, renders the matching form itself; browser
+     PGP-encrypts {fields, nonce, ts, mode, round} to the key from the link; POST <submit URL>
      (the page then polls <status URL>)
   If the site needs another factor (e.g. TOTP), the driver starts a NEW round: a new token and a
   new DingTalk message, handled exactly like step 5-6 with mode=totp.
@@ -71,7 +71,7 @@ Dependencies: `modelcontextprotocol/go-sdk` (MCP), `ProtonMail/go-crypto/openpgp
   remaining uses and increments `uses` atomically (file lock, safe across processes), or generates a
   new one when none is live. Retired keys are deleted on the next acquire.
 - Key type: Curve25519 (ed25519 + cv25519). The armored public key is ~400 bytes, practical to
-  copy/paste from DingTalk (RSA keys are 2-4x longer).
+  fit in a link fragment (RSA keys are 2-4x longer).
 
 ### 4.2 Tunnel providers (`tunnel`)
 ```go
@@ -116,19 +116,30 @@ random 128-bit token, own URL, own DingTalk message and own single accepted subm
 equal peers; nothing in the API distinguishes "first" from "second". The mode is part of the URL
 the human receives, not something the API tells the page.
 
-Connection string (one copy-paste from DingTalk):
-`login1.<base64url{ "submit": "https://x.pinggy.link/<token>/submit?mode=totp&round=2",
-"status": ".../<token>/status", "site": "gitlab.corp.example", "pubkey": "-----BEGIN PGP...", "fpr": "..."}>`
+Round link (sent in DingTalk, clicked by the human):
+```
+https://leafai.github.io/login/v0.1.0/#v=1&site=gitlab.corp.example&mode=totp&round=2
+  &u=<urlenc https://x.pinggy.link/<token>>&k=<base64url binary OpenPGP public key>&f=<fingerprint>
+```
+- Parameters live in the **fragment (`#`), not the query (`?`)**: fragments are never sent to any
+  server, so neither GitHub Pages nor DingTalk's link-preview crawler ever sees the tunnel URL,
+  token or key. (Query parameters would land in GitHub's access logs.)
+- The key is the binary packet in base64url (~300 bytes for Curve25519), not the armored text, to keep
+  the link short; the page reads it with `openpgp.readKey({binaryKey})`.
+- Optional `custom` field list is carried as `fields=<base64url JSON>`.
+- The page is version-pinned in the path (`/v0.1.0/`), so a link keeps working with the page it was
+  generated for. Base address is configurable (`web.page_url`) for self-hosted copies.
 
 Static page (`web/login.html`, single file with vendored `openpgp.js`, no external requests):
-- Obtained from a trusted origin, in order of preference: (a) `login page` subcommand writes it
-  to disk (embedded in the installed binary) and the user opens it as a local file; (b) a
-  version-pinned copy on GitHub Pages for the repo/tag, address + SHA-256 given in the DingTalk message.
-- Parses the pasted string; shows site, mode, API host and key fingerprint for the human to check.
+- Primary: the version-pinned copy published from this repo to GitHub Pages (built in CI from the
+  tagged source, embedded `openpgp.js` included). Fallbacks: a self-hosted copy via `web.page_url`,
+  or `login page` writing the embedded copy to disk to open locally with a "paste link" box.
+- Parses the fragment; shows site, mode, API host and key fingerprint for the human to check, and
+  clears the fragment from the address bar (`history.replaceState`) after reading it.
 - Renders the form for the mode from a **built-in whitelist**: `login` = username+password,
-  `totp` = code, `custom` = a list of `{name,label,secret?}` text inputs carried in the pasted string.
+  `totp` = code, `custom` = a list of `{name,label,secret?}` text inputs carried in the link fragment.
   Nothing is fetched from the tunnel to decide what to render; text is written with `textContent`.
-- Encrypts to the pasted key only, POSTs the armored message, then polls `status`.
+- Encrypts to the key from the link fragment only, POSTs the armored message, then polls `status`.
 
 API (bound to 127.0.0.1, reachable only via the tunnel; two routes per round):
 - `POST /<t>/submit?mode=<m>&round=<n>` -> body is an armored PGP message; plaintext JSON
@@ -145,9 +156,8 @@ API (bound to 127.0.0.1, reachable only via the tunnel; two routes per round):
 ### 4.4 DingTalk robot (`notify`)
 Custom-robot webhook `https://oapi.dingtalk.com/robot/send?access_token=…`, with optional
 signing secret (`timestamp\nsecret` HMAC-SHA256, base64, url-encoded) and keyword/IP-allowlist
-compatible text. Sends a markdown message: site, requester ("agent asked for login"), the static page address (+ its
-SHA-256), the **connection string in a code block** (to be copied), the key fingerprint, expiry
-time. `@mobiles` configurable.
+compatible text. Sends a markdown message: site, requester ("agent asked for login"), the **round link** (one
+click), the key fingerprint, expiry time. `@mobiles` configurable. One message per round.
 
 ### 4.5 Site drivers (`site`)
 ```go
@@ -248,9 +258,10 @@ MCP registration: `claude mcp add login -- login`.
   message (shown as plain text only), or learn that a login happened. It cannot change which form
   is shown (mode comes from the DingTalk string) nor read anything submitted. The page shows site,
   mode, API host and key fingerprint for the human to check against DingTalk.
-- **Residual trust:** the static page's origin. A local file from the installed binary is the
-  strongest; the Pages copy relies on GitHub + the SHA-256 in the DingTalk message.
-  DingTalk is trusted to deliver the connection string unmodified.
+- **Residual trust:** the static page's origin (GitHub Pages for this repo, pinned to a release
+  path; a compromised repo/release would compromise users) and DingTalk delivering the link
+  unmodified. For stricter setups, self-host the page (`web.page_url`) or use the local copy from
+  `login page`.
 - Private key stays local, 0600; plaintext password zeroed after use, never logged; MCP responses
   contain only cookies/tokens. Replay protection via nonce+ts+round; token compared constant-time.
 - Returned cookies are secrets handed to the agent by design; `login_sessions` never prints them.
@@ -276,9 +287,11 @@ MCP registration: `claude mcp add login -- login`.
 6. Archery: execute automatically after approval; DDL allowed by default, `archery.allow_ddl: false`
    disables it.
 7. Tunnel serves a JSON API only (no `/mode`); the login/TOTP form comes from a trusted static page
-   where the user pastes the connection string (full per-round submit URL incl. mode + public key).
+   opened via a round link (full per-round submit URL incl. mode + public key in the fragment).
    Login and TOTP are equal, independent rounds, each with its own URL, token and DingTalk message.
+   The per-round parameters (mode, key, URL) are carried in the **fragment** of a GitHub Pages link,
+   so the human just clicks it; no manual copy/paste.
 8. Repo has a `master` branch (created); it is the PR base.
 
-Still open: where the trusted static page is hosted besides the local file (GitHub Pages under the
-repo is assumed; needs Pages enabled on `master`).
+Still open: publishing the static page needs GitHub Pages enabled for the repo (source: GitHub
+Actions, deploying `web/` on each release tag). That is a repo setting for the owner.
