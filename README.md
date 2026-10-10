@@ -117,5 +117,6 @@ real browser, and every site driver against *fake* servers that imitate the flow
 2FA flow were checked against the Archery source code, then exercised against a fake server.
 
 **Not verified against live systems:** the real SSH provider services (use `login doctor -tunnel`), a real DingTalk robot, and the live
-GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. The second-factor handling of Kibana/KubeSphere/Nightingale (stock versions of these have no TOTP) is
-best-effort and needs a live check.
+GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. **Nightingale** (v7) was checked against its source: login payload, the optional math-image captcha (shown to
+the human inside the login step) and optional RSA password encryption. **Kibana** and **KubeSphere** have no
+TOTP in stock form; their OTP retry path is a guess for custom setups and has never run against a real one.

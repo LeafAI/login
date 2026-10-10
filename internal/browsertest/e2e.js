@@ -16,6 +16,8 @@ const { chromium } = require('playwright');
     return;
   }
   await page.waitForSelector('#main:not([hidden])', { timeout: 10000 });
+  await page.waitForTimeout(300); // let images settle
+  const imgs = await page.$$eval('img.captcha', (els) => els.map((e) => ({ src: e.src.slice(0, 22), w: e.naturalWidth })));
   const fpr = await page.textContent('#d-fpr');
   const hashAfter = await page.evaluate(() => location.hash);
   if (action === 'submit') {
@@ -29,6 +31,6 @@ const { chromium } = require('playwright');
   }
   await page.waitForFunction(() => /Done|failed|Rejected|Another step|refused|Stopped/.test(document.getElementById('msg').textContent), null, { timeout: 15000 });
   const msg = await page.textContent('#msg');
-  console.log(JSON.stringify({ fpr, hashAfter, msg, errors }));
+  console.log(JSON.stringify({ fpr, hashAfter, msg, errors, imgs }));
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });

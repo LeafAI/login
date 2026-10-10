@@ -38,6 +38,7 @@ type Field struct {
 	Name   string `json:"name"`
 	Label  string `json:"label"`
 	Secret bool   `json:"secret,omitempty"`
+	Image  string `json:"image,omitempty"` // data:image/...;base64,... shown above the input
 }
 
 // Round is everything the page needs for one authentication round.

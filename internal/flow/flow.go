@@ -299,7 +299,7 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 	var cf []web.Field
 	if mode == "custom" {
 		for _, x := range fields {
-			cf = append(cf, web.Field{Name: x.Name, Label: x.Label, Secret: x.Secret})
+			cf = append(cf, web.Field{Name: x.Name, Label: x.Label, Secret: x.Secret, Image: x.Image})
 		}
 	}
 	expires := time.Now().Add(f.m.cfg.TTL)

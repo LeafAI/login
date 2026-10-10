@@ -11,6 +11,7 @@
       { name: 'code', label: 'One-time code', secret: false, type: 'text', ac: 'one-time-code', numeric: true }] },
   };
   const FIELD_NAME = /^[a-z_][a-z0-9_]{0,31}$/;
+  const IMAGE_URL = /^data:image\/(png|jpeg|gif);base64,[A-Za-z0-9+\/]+=*$/;
 
   let ctx = null; // { site, mode, round, api, key, fpr, fields }
   let busy = false;
@@ -51,8 +52,10 @@
       if (!Array.isArray(raw) || raw.length === 0 || raw.length > 8) throw new Error('Bad field list in link.');
       fields = raw.map((f) => {
         if (!f || !FIELD_NAME.test(f.name || '')) throw new Error('Bad field name in link.');
+        let image = '';
+        if (typeof f.image === 'string' && IMAGE_URL.test(f.image) && f.image.length < 200000) image = f.image;
         return { name: f.name, label: String(f.label || f.name).slice(0, 60), secret: !!f.secret,
-                 type: f.secret ? 'password' : 'text', ac: 'off' };
+                 type: f.secret ? 'password' : 'text', ac: 'off', image };
       });
     } else if (MODES[mode]) {
       fields = MODES[mode].fields;
@@ -89,7 +92,15 @@
       inp.autocomplete = f.ac;
       if (f.numeric) inp.inputMode = 'numeric';
       if (i === 0) setTimeout(() => inp.focus(), 0);
-      box.append(l, inp);
+      box.append(l);
+      if (f.image) {
+        const img = document.createElement('img');
+        img.className = 'captcha';
+        img.alt = 'captcha';
+        img.src = f.image; // validated as a data: image URL when the link was parsed
+        box.append(img);
+      }
+      box.append(inp);
     });
   }
 

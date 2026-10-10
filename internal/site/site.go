@@ -24,6 +24,8 @@ type Field struct {
 	Name   string `json:"name"`
 	Label  string `json:"label"`
 	Secret bool   `json:"secret,omitempty"`
+	// Image is an optional data:image/(png|jpeg|gif);base64,... URL shown above the input (a captcha).
+	Image string `json:"image,omitempty"`
 }
 
 // Credentials holds the decrypted values submitted in one round.

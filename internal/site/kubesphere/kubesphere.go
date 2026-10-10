@@ -1,8 +1,8 @@
 // Package kubesphere logs in to KubeSphere 3.x through the OAuth password grant.
 //
-// A second factor is not part of stock KubeSphere; if the token endpoint's error response looks
-// like a 2FA requirement the driver asks for a "totp" round and retries with an "otp" form field
-// (best effort, unverified against a live 2FA setup).
+// Stock KubeSphere has no second factor. If the token endpoint's error response mentions OTP/MFA
+// (custom identity providers), the driver asks for a "totp" round and retries with an "otp" form field.
+// That path is a guess that has never run against a real second factor.
 package kubesphere
 
 import (

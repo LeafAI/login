@@ -61,6 +61,11 @@ type Result struct {
 	Msg        string   `json:"msg"`
 	MainHidden bool     `json:"mainHidden"`
 	Errors     []string `json:"errors"`
+	// Imgs describes the captcha images the page rendered (naturalWidth > 0 means the image loaded).
+	Imgs []struct {
+		Src string `json:"src"`
+		W   int    `json:"w"`
+	} `json:"imgs"`
 }
 
 // Drive opens pageDir/index.html with the given link fragment and acts as the human.

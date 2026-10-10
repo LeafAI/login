@@ -1,8 +1,8 @@
 // Package kibana logs in to Kibana's built-in "basic" security provider.
 //
-// Kibana's basic provider has no native TOTP. If the login response looks like a second-factor
-// requirement (e.g. a fronting auth proxy or a custom provider), the driver asks for a "totp" round
-// and retries with params.otp (best effort, unverified against a live 2FA setup).
+// Kibana's built-in basic provider has no TOTP. As a courtesy for setups with a custom provider or a
+// fronting auth layer, a 401 whose body mentions OTP/MFA makes the driver ask for a "totp" round and
+// retry with params.otp. That path is a guess that has never run against a real second factor.
 package kibana
 
 import (

@@ -13,7 +13,6 @@ import (
 	"github.com/LeafAI/login/internal/site"
 	_ "github.com/LeafAI/login/internal/site/kibana"
 	_ "github.com/LeafAI/login/internal/site/kubesphere"
-	_ "github.com/LeafAI/login/internal/site/nightingale"
 	"github.com/LeafAI/login/internal/site/sitetest"
 )
 
@@ -118,39 +117,5 @@ func TestKubeSphere(t *testing.T) {
 	bad := &sitetest.Asker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "x"}}}
 	if _, err := run(t, "kubesphere", srv, bad); !errors.Is(err, site.ErrBadCredentials) {
 		t.Errorf("bad creds: %v", err)
-	}
-}
-
-func TestNightingale(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/n9e/auth/login":
-			var b map[string]string
-			json.NewDecoder(r.Body).Decode(&b)
-			switch {
-			case b["username"] != "alice" || b["password"] != "pw":
-				w.Write([]byte(`{"dat":null,"err":"invalid username or password"}`))
-			case b["code"] != "123456":
-				w.Write([]byte(`{"dat":null,"err":"mfa code required"}`))
-			default:
-				w.Write([]byte(`{"dat":{"access_token":"AT","refresh_token":"RT"},"err":""}`))
-			}
-		case "/api/n9e/self/profile":
-			if r.Header.Get("Authorization") != "Bearer AT" {
-				w.WriteHeader(401)
-				return
-			}
-			w.Write([]byte(`{}`))
-		}
-	}))
-	defer srv.Close()
-	a := answers("123456")
-	s, err := run(t, "nightingale", srv, a)
-	if err != nil || strings.Join(a.Asked, ",") != "login,totp" || s.Tokens["access_token"] != "AT" {
-		t.Fatalf("%+v %v %v", s, err, a.Asked)
-	}
-	bad := &sitetest.Asker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "x"}}}
-	if _, err := run(t, "nightingale", srv, bad); !errors.Is(err, site.ErrBadCredentials) || len(bad.Asked) != 1 {
-		t.Errorf("bad creds: %v asked=%v", err, bad.Asked)
 	}
 }

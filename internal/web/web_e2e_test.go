@@ -109,3 +109,24 @@ func TestBrowserRefusesMismatchedKey(t *testing.T) {
 		t.Errorf("page did not refuse: %+v", res)
 	}
 }
+
+const png1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+func TestBrowserRendersCaptchaImageAndDropsHostileOnes(t *testing.T) {
+	fields := []web.Field{
+		{Name: "username", Label: "Username"},
+		{Name: "verifyvalue", Label: "Captcha", Image: "data:image/png;base64," + png1x1},
+		{Name: "other", Label: "Other", Image: "https://evil.example/track.png"},     // not a data: image: must be dropped
+		{Name: "third", Label: "Third", Image: "data:image/svg+xml;base64,PHN2Zy8+"}, // svg is not allowed
+	}
+	res, sub, err := drive(t, "custom", fields, "submit", `{"username":"alice","verifyvalue":"7","other":"x","third":"y"}`, "")
+	if err != nil || sub.Fields["verifyvalue"] != "7" {
+		t.Fatalf("submit: %+v %v", sub, err)
+	}
+	if len(res.Imgs) != 1 || res.Imgs[0].W != 1 || res.Imgs[0].Src != "data:image/png;base64," {
+		t.Errorf("rendered images: %+v (want exactly the one data:image/png, loaded)", res.Imgs)
+	}
+	if len(res.Errors) > 0 {
+		t.Errorf("page errors (CSP?): %v", res.Errors)
+	}
+}

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src https: http:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; connect-src https: http:; base-uri 'none'; form-action 'none'">
 <title>login</title>
 <style>
   :root { color-scheme: light dark; --fg:#1a1a1a; --bg:#fff; --muted:#666; --line:#d0d0d0; --accent:#1f6feb; --bad:#c62828; --ok:#2e7d32; }
@@ -23,6 +23,7 @@
   button[disabled] { opacity:.5; cursor:default; }
   #msg { margin-top:1rem; font-size:.9rem; white-space:pre-wrap; }
   .bad { color:var(--bad); } .ok { color:var(--ok); }
+  img.captcha { display:block; max-width:100%; height:auto; margin:.5rem 0; border:1px solid var(--line); border-radius:.4rem; background:#fff; }
   [hidden] { display:none !important; }
 </style>
 </head>
