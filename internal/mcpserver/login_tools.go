@@ -13,6 +13,7 @@ import (
 
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/flow"
+	"github.com/LeafAI/login/internal/ratelimit"
 	"github.com/LeafAI/login/internal/session"
 	"github.com/LeafAI/login/internal/site"
 )
@@ -86,10 +87,21 @@ func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw,
 		s.cache.Delete(session.Key(base))
 	}
 	f := s.mgr.Start(d, base, reason, s.hc, func(f *flow.Flow, r flow.Result) {
-		if r.Err == nil {
+		var rj *flow.RejectedError
+		switch {
+		case r.Err == nil:
 			s.cache.Put(f.Base, d, r.Session)
+		case errors.As(r.Err, &rj):
+			s.limiter.Rejected(session.Key(f.Base))
 		}
 	})
+	select {
+	case <-f.Done(): // refused before it started (rate limit), or finished instantly
+		if r := f.Result(); r.Err != nil {
+			return nil, classify(r.Err)
+		}
+	default:
+	}
 	if !wait {
 		return pendingOut(f), nil
 	}
@@ -168,10 +180,15 @@ func sessionOutput(name string, base *url.URL, sess *site.Session) LoginOutput {
 // classify maps internal errors to tool error codes.
 func classify(err error) *ToolError {
 	var rj *flow.RejectedError
+	var lim *ratelimit.Limited
 	switch {
 	case errors.As(err, &rj):
 		e := errf("user_rejected", false, "%s", rj.Error())
 		e.Hint = "The human declined the login request. Do not retry unless the user asks you to."
+		return e
+	case errors.As(err, &lim):
+		e := errf("rate_limited", true, "%v", err)
+		e.Hint = "People are being asked too often. Do not retry in a loop: wait, or ask the user to complete or reject the pending request."
 		return e
 	case errors.Is(err, flow.ErrHumanTimeout):
 		e := errf("human_timeout", true, "%v", err)

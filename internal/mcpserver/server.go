@@ -13,10 +13,12 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/LeafAI/login/internal/audit"
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/flow"
 	"github.com/LeafAI/login/internal/keyring"
 	"github.com/LeafAI/login/internal/notify"
+	"github.com/LeafAI/login/internal/ratelimit"
 	"github.com/LeafAI/login/internal/session"
 	"github.com/LeafAI/login/internal/site"
 	"github.com/LeafAI/login/internal/site/archery"
@@ -42,6 +44,8 @@ type Server struct {
 	tracker *archery.Tracker
 	notify  flow.Notifier
 	log     func(string, ...any)
+	audit   *audit.Log
+	limiter *ratelimit.Limiter
 }
 
 // New builds the MCP server with all tools registered.
@@ -69,6 +73,15 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 		s.cache = session.New()
 	}
 	s.cache.Log = s.log
+	if cfg.Audit.On() {
+		a, err := audit.Open(cfg.Audit.File, s.log)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.audit = a
+	}
+	s.limiter = ratelimit.New(ratelimit.Config{PerSite: cfg.Limits.PerSite, Total: cfg.Limits.Total,
+		Window: cfg.Limits.Window, RejectCooldown: cfg.Limits.RejectCooldown}, nil)
 	s.notify = opt.Notifier
 	if s.notify == nil {
 		s.notify = &notify.DingTalk{Webhook: cfg.DingTalk.Webhook, Secret: cfg.DingTalk.Secret, Keyword: cfg.DingTalk.Keyword, Mobiles: cfg.DingTalk.Mobiles}
@@ -83,6 +96,7 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	s.mgr = flow.NewManager(flow.Config{
 		Keys:     keyring.NewPool(cfg.Keys.Dir, cfg.Keys.MaxUses, cfg.Keys.MaxAge),
 		Notifier: s.notify, Tunnels: ts, PageURL: cfg.Web.PageURL, TTL: cfg.Web.TTL, Log: s.log,
+		Admit: s.admit, OnRound: s.onRound,
 	})
 	s.tracker = archery.NewTracker(cfg.Archery.DDLAllowed(), cfg.Archery.WaitTimeout)
 	s.tracker.Poll = cfg.Archery.PollInterval
@@ -118,21 +132,24 @@ func (s *Server) register(m *mcp.Server) {
 		return &mcp.ToolAnnotations{OpenWorldHint: &v, IdempotentHint: h}
 	}
 	destructive := true
-	addTool(m, "login", "Log in to a website (gitlab, kibana, kubesphere, nightingale, archery, skywalking, or a configured site) and return a valid cookie/token. A human types the credential on a page opened from a DingTalk link; the agent never sees the password. If still pending after max_block_seconds, call login_wait with the returned login_id.", open(false), s.login)
-	addTool(m, "login_wait", "Resume a pending login started by `login`.", open(true), s.loginWait)
-	addTool(m, "login_sites", "List the websites this server can log in to.", ro, s.sites)
-	addTool(m, "login_sessions", "List cached login sessions (no secrets).", ro, s.sessions)
-	addTool(m, "logout", "Forget the cached session for a URL (or all sessions) and cancel a pending login for it.", nil, s.logout)
-	addTool(m, "archery_instances", "List Archery instances (and optionally an instance's databases) the user can access.", ro, s.archeryInstances)
-	addTool(m, "archery_query", "Run a read-only SQL query through Archery's query endpoint (no approval needed).", ro, s.archeryQuery)
-	addTool(m, "archery_run_sql", "Submit SQL to Archery, notify approvers, wait for approval, execute automatically and return the result, as one call. If approval takes longer than max_block_seconds a pending result with workflow_id is returned; continue with archery_wait.", &mcp.ToolAnnotations{DestructiveHint: &destructive}, s.archeryRunSQL)
-	addTool(m, "archery_wait", "Continue waiting for an Archery workflow; executes it once when approved. Safe to call repeatedly.", &mcp.ToolAnnotations{IdempotentHint: true}, s.archeryWait)
-	addTool(m, "archery_workflow_status", "Read the state of an Archery workflow.", ro, s.archeryStatus)
-	addTool(m, "archery_cancel", "Abort an Archery workflow that has not started executing.", nil, s.archeryCancel)
+	addTool(m, s.observe, "login", "Log in to a website (gitlab, kibana, kubesphere, nightingale, archery, skywalking, or a configured site) and return a valid cookie/token. A human types the credential on a page opened from a DingTalk link; the agent never sees the password. If still pending after max_block_seconds, call login_wait with the returned login_id.", open(false), s.login)
+	addTool(m, s.observe, "login_wait", "Resume a pending login started by `login`.", open(true), s.loginWait)
+	addTool(m, s.observe, "login_sites", "List the websites this server can log in to.", ro, s.sites)
+	addTool(m, s.observe, "login_sessions", "List cached login sessions (no secrets).", ro, s.sessions)
+	addTool(m, s.observe, "logout", "Forget the cached session for a URL (or all sessions) and cancel a pending login for it.", nil, s.logout)
+	addTool(m, s.observe, "archery_instances", "List Archery instances (and optionally an instance's databases) the user can access.", ro, s.archeryInstances)
+	addTool(m, s.observe, "archery_query", "Run a read-only SQL query through Archery's query endpoint (no approval needed).", ro, s.archeryQuery)
+	addTool(m, s.observe, "archery_run_sql", "Submit SQL to Archery, notify approvers, wait for approval, execute automatically and return the result, as one call. If approval takes longer than max_block_seconds a pending result with workflow_id is returned; continue with archery_wait.", &mcp.ToolAnnotations{DestructiveHint: &destructive}, s.archeryRunSQL)
+	addTool(m, s.observe, "archery_wait", "Continue waiting for an Archery workflow; executes it once when approved. Safe to call repeatedly.", &mcp.ToolAnnotations{IdempotentHint: true}, s.archeryWait)
+	addTool(m, s.observe, "archery_workflow_status", "Read the state of an Archery workflow.", ro, s.archeryStatus)
+	addTool(m, s.observe, "archery_cancel", "Abort an Archery workflow that has not started executing.", nil, s.archeryCancel)
 }
 
+// observer is told about every finished tool call (for the audit log).
+type observer func(tool string, req *mcp.CallToolRequest, in, out any, terr *ToolError, took time.Duration)
+
 // addTool registers a typed tool with structured success/error results.
-func addTool[In any](m *mcp.Server, name, desc string, ann *mcp.ToolAnnotations,
+func addTool[In any](m *mcp.Server, obs observer, name, desc string, ann *mcp.ToolAnnotations,
 	h func(ctx context.Context, req *mcp.CallToolRequest, in In) (any, *ToolError)) {
 	schema, err := jsonschema.For[In](nil)
 	if err != nil {
@@ -148,7 +165,9 @@ func addTool[In any](m *mcp.Server, name, desc string, ann *mcp.ToolAnnotations,
 					return toolError(errf("invalid_argument", false, "%v", err)), nil
 				}
 			}
+			start := time.Now()
 			out, terr := h(ctx, req, in)
+			obs(name, req, in, out, terr, time.Since(start))
 			if terr != nil {
 				return toolError(terr), nil
 			}
@@ -164,8 +183,11 @@ func toolError(e *ToolError) *mcp.CallToolResult {
 
 func (s *Server) progress(ctx context.Context, req *mcp.CallToolRequest, n *float64, msg string) {
 	s.log("%s", msg)
+	if req == nil || req.Params == nil || req.Session == nil {
+		return
+	}
 	tok := req.Params.GetProgressToken()
-	if tok == nil || req.Session == nil {
+	if tok == nil {
 		return
 	}
 	*n++

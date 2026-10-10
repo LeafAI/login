@@ -61,6 +61,12 @@ type Config struct {
 	TTL      time.Duration // per round
 	Grace    time.Duration // keep the API up after the end so the page can show the result
 	Log      func(format string, args ...any)
+	// Admit, when set, is asked before a NEW flow bothers a human (a request that joins a running flow is
+	// not asked again). A non-nil error refuses the flow: Start returns it already finished with that error.
+	Admit func(d site.Driver, base *url.URL, reason string) error
+	// OnRound, when set, is told once per human round (login, totp, ...) after its DingTalk message was
+	// sent. A replacement link after a tunnel restart is the same round and is not reported again.
+	OnRound func(f *Flow, mode string, round int)
 }
 
 type Manager struct {
@@ -139,6 +145,12 @@ func (m *Manager) Start(d site.Driver, base *url.URL, reason string, hc *http.Cl
 		m.mu.Unlock()
 		return f
 	}
+	if adm := m.cfg.Admit; adm != nil {
+		if err := adm(d, base, reason); err != nil {
+			m.mu.Unlock()
+			return refused(d, base, reason, err)
+		}
+	}
 	var idb [8]byte
 	rand.Read(idb[:])
 	ctx, cancel := context.WithCancel(context.Background())
@@ -164,6 +176,14 @@ func (m *Manager) Start(d site.Driver, base *url.URL, reason string, hc *http.Cl
 			m.mu.Unlock()
 		}()
 	}()
+	return f
+}
+
+// refused is a flow that never started: it is already done and carries the reason.
+func refused(d site.Driver, base *url.URL, reason string, err error) *Flow {
+	f := &Flow{Site: d.Name(), Base: base, Reason: reason, cancel: func() {}, done: make(chan struct{}),
+		snap: Snapshot{Phase: "done"}, result: Result{Err: err}}
+	close(f.done)
 	return f
 }
 
@@ -316,6 +336,9 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 	}
 	if err := send(""); err != nil {
 		return nil, err
+	}
+	if cb := f.m.cfg.OnRound; cb != nil {
+		cb(f, mode, f.rounds)
 	}
 	f.set(Snapshot{Phase: "waiting_human", Mode: mode, Round: f.rounds, ExpiresAt: expires})
 	f.logf("waiting for human: %s round %d (%s)", f.Base.Host, f.rounds, mode)

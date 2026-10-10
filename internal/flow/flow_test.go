@@ -254,3 +254,81 @@ func TestTunnelGivesUpAfterRepeatedDeaths(t *testing.T) {
 		t.Fatal("flow did not give up")
 	}
 }
+
+type countingNotifier struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingNotifier) Markdown(context.Context, string, string) error {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return nil
+}
+
+func TestAdmitRefusalNeverBothersAHuman(t *testing.T) {
+	n := &countingNotifier{}
+	cfg := Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: n, Tunnels: fakeTunnels{},
+		PageURL: "https://page.example/", TTL: time.Second, Grace: time.Millisecond,
+		Admit: func(site.Driver, *url.URL, string) error { return errors.New("too many requests") }}
+	m := NewManager(cfg)
+	u, _ := url.Parse("https://site.example")
+	called := false
+	f := m.Start(stubDriver{}, u, "r", http.DefaultClient, func(*Flow, Result) { called = true })
+	select {
+	case <-f.Done():
+	default:
+		t.Fatal("a refused flow must already be finished")
+	}
+	if r := f.Result(); r.Err == nil || r.Err.Error() != "too many requests" {
+		t.Fatalf("result = %+v", r)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n.n != 0 || called {
+		t.Fatalf("notified %d times, onDone called=%v; a refused flow must do nothing", n.n, called)
+	}
+	if m.CancelBase("https://site.example") {
+		t.Error("a refused flow must not stay registered as running")
+	}
+}
+
+func TestAdmitIsAskedOncePerNewFlowNotPerJoiner(t *testing.T) {
+	asked := 0
+	cfg := Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{},
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond,
+		Admit: func(site.Driver, *url.URL, string) error { asked++; return nil }}
+	m := NewManager(cfg)
+	u, _ := url.Parse("https://site.example")
+	a := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	b := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	if a != b || asked != 1 {
+		t.Fatalf("same flow=%v, Admit calls=%d; joining a running flow must not count again", a == b, asked)
+	}
+	m.Close()
+}
+
+func TestOnRoundReportsEachRoundOnceEvenAfterATunnelRestart(t *testing.T) {
+	ts := &dyingTunnels{}
+	rec := &recNotifier{}
+	var mu sync.Mutex
+	var got []string
+	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: ts,
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond,
+		OnRound: func(f *Flow, mode string, round int) {
+			mu.Lock()
+			got = append(got, fmt.Sprintf("%s:%s:%d", f.Base.Host, mode, round))
+			mu.Unlock()
+		}})
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+	ts.started[0].Close() // a replacement link is sent for the SAME round
+	waitFor(t, "replacement message", func() bool { return len(rec.all()) == 2 })
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "site.example:login:1" {
+		t.Fatalf("OnRound calls = %v; one round, even with a replacement link, is reported once", got)
+	}
+	m.Close()
+}

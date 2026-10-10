@@ -1,11 +1,13 @@
 package mcpserver_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/LeafAI/login/internal/audit"
 	"github.com/LeafAI/login/internal/browsertest"
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/flow"
@@ -113,10 +116,11 @@ func human(t *testing.T, msg, dir, action, values, reason string) string {
 }
 
 type env struct {
-	cs   *mcp.ClientSession
-	rec  *recorder
-	dir  string
-	site *httptest.Server
+	auditFile string
+	cs        *mcp.ClientSession
+	rec       *recorder
+	dir       string
+	site      *httptest.Server
 }
 
 func setup(t *testing.T) *env { return setupWith(t, nil) }
@@ -153,7 +157,7 @@ func setupWith(t *testing.T, tweak func(*config.Config)) *env {
 	t.Cleanup(func() { cs.Close() })
 	gl := fakeGitLab()
 	t.Cleanup(gl.Close)
-	return &env{cs, rec, dir, gl}
+	return &env{cfg.Audit.File, cs, rec, dir, gl}
 }
 
 func (e *env) call(t *testing.T, tool string, args map[string]any) (map[string]any, bool) {
@@ -200,6 +204,17 @@ func TestLoginTwoRoundsViaBrowser(t *testing.T) {
 	out, isErr = e.call(t, "login_wait", map[string]any{"login_id": id, "max_block_seconds": 20})
 	if isErr || out["status"] != "ok" || !strings.Contains(out["cookie_header"].(string), "_gitlab_session=sess") || out["auth"] != "cookie" {
 		t.Fatalf("final: %v", out)
+	}
+
+	// The audit trail names both rounds that reached the person (password, then TOTP), not just the first.
+	var rounds []string
+	for _, ev := range readAudit(t, e.auditFile) {
+		if ev.Event == "human_round" {
+			rounds = append(rounds, fmt.Sprintf("%s:%d", ev.Mode, ev.Round))
+		}
+	}
+	if strings.Join(rounds, ",") != "login:1,totp:2" {
+		t.Errorf("audited rounds = %v, want login:1,totp:2", rounds)
 	}
 
 	// Second call reuses the validated session without bothering the human.
@@ -255,4 +270,45 @@ func TestToolsListAndNoAuthSite(t *testing.T) {
 	if out, isErr := e.call(t, "login", map[string]any{"url": "https://unknown.example"}); !isErr || out["code"] != "unsupported_site" {
 		t.Errorf("unsupported: %v", out)
 	}
+}
+
+// After the human presses Reject, the same site is refused for the cool-down, so an agent cannot keep
+// pestering the person who just said no.
+func TestRejectCooldownEndToEnd(t *testing.T) {
+	e := setupWith(t, func(c *config.Config) { c.Limits.RejectCooldown = time.Hour })
+	out, _ := e.call(t, "login", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
+	id := out["login_id"].(string)
+	human(t, e.rec.wait(t, 1), e.dir, "reject", "", "not now")
+	if out, isErr := e.call(t, "login_wait", map[string]any{"login_id": id, "max_block_seconds": 20}); !isErr || out["code"] != "user_rejected" {
+		t.Fatalf("reject: %v", out)
+	}
+	out, isErr := e.call(t, "login", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
+	if !isErr || out["code"] != "rate_limited" || !strings.Contains(out["message"].(string), "rejected") {
+		t.Fatalf("second request right after a rejection: %v", out)
+	}
+	e.rec.mu.Lock()
+	n := len(e.rec.msgs)
+	e.rec.mu.Unlock()
+	if n != 1 {
+		t.Errorf("the person was messaged %d times; the refused request must not notify", n)
+	}
+}
+
+func readAudit(t *testing.T, path string) []audit.Event {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var out []audit.Event
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var ev audit.Event
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, ev)
+	}
+	return out
 }

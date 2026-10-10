@@ -23,6 +23,8 @@ type Config struct {
 	MCP      MCP      `yaml:"mcp"`
 	Sessions Sessions `yaml:"sessions"`
 	Security Security `yaml:"security"`
+	Audit    Audit    `yaml:"audit"`
+	Limits   Limits   `yaml:"limits"`
 	// Aliases maps a hostname (or host:port) to a site driver name, for sites whose hostname does not
 	// hint at the product, e.g. "es.corp.example": kibana.
 	Aliases map[string]string `yaml:"aliases"`
@@ -47,6 +49,25 @@ type Security struct {
 	// AllowedHosts, when non-empty, restricts which sites the agent may log in to. Entries are
 	// glob patterns matched against "host" and "host:port", e.g. "*.corp.example".
 	AllowedHosts []string `yaml:"allowed_hosts"`
+}
+
+// Audit controls the append-only activity log (JSON lines, metadata only, no secrets).
+type Audit struct {
+	// Enabled is on by default; set it to false to turn the log off.
+	Enabled *bool  `yaml:"enabled"`
+	File    string `yaml:"file"`
+}
+
+// On reports whether auditing is enabled (default true).
+func (a Audit) On() bool { return a.Enabled == nil || *a.Enabled }
+
+// Limits protects people from being flooded with login requests by an agent. Only requests that
+// reach a human count; a cached session never does. A negative value switches a rule off.
+type Limits struct {
+	PerSite        int           `yaml:"per_site"`        // requests to humans per site per window (default 6)
+	Total          int           `yaml:"total"`           // requests to humans overall per window (default 20)
+	Window         time.Duration `yaml:"window"`          // default 1h
+	RejectCooldown time.Duration `yaml:"reject_cooldown"` // refuse a site after the human rejected it (default 10m)
 }
 
 type MCP struct {
@@ -170,6 +191,21 @@ func (c *Config) applyDefaults(dir string) {
 	}
 	if c.Web.TTL == 0 {
 		c.Web.TTL = 10 * time.Minute
+	}
+	if c.Audit.File == "" {
+		c.Audit.File = filepath.Join(dir, "audit.jsonl")
+	}
+	if c.Limits.PerSite == 0 {
+		c.Limits.PerSite = 6
+	}
+	if c.Limits.Total == 0 {
+		c.Limits.Total = 20
+	}
+	if c.Limits.Window == 0 {
+		c.Limits.Window = time.Hour
+	}
+	if c.Limits.RejectCooldown == 0 {
+		c.Limits.RejectCooldown = 10 * time.Minute
 	}
 	if c.MCP.MaxBlockSeconds == 0 {
 		c.MCP.MaxBlockSeconds = 50
