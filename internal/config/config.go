@@ -19,6 +19,7 @@ type Config struct {
 	Keys     Keys     `yaml:"keys"`
 	Web      Web      `yaml:"web"`
 	MCP      MCP      `yaml:"mcp"`
+	Sessions Sessions `yaml:"sessions"`
 	Security Security `yaml:"security"`
 	// Aliases maps a hostname (or host:port) to a site driver name, for sites whose hostname does not
 	// hint at the product, e.g. "es.corp.example": kibana.
@@ -26,6 +27,13 @@ type Config struct {
 	Archery Archery           `yaml:"archery"`
 	// Sites defines extra websites with the declarative generic driver.
 	Sites []generic.Spec `yaml:"sites"`
+}
+
+type Sessions struct {
+	// Persist keeps logins in an encrypted file so later MCP server processes can reuse them
+	// (default false: sessions live in memory only).
+	Persist bool   `yaml:"persist"`
+	Dir     string `yaml:"dir"`
 }
 
 type Security struct {
@@ -132,6 +140,9 @@ func (c *Config) applyDefaults(dir string) {
 	}
 	if c.Keys.MaxAge == 0 {
 		c.Keys.MaxAge = 24 * time.Hour
+	}
+	if c.Sessions.Dir == "" {
+		c.Sessions.Dir = filepath.Join(dir, "sessions")
 	}
 	if c.Web.PageURL == "" {
 		c.Web.PageURL = "https://leafai.github.io/login/v0.1.0/"

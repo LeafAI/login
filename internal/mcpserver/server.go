@@ -53,13 +53,19 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 		}
 		site.Replace(d)
 	}
-	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log, cache: session.New()}
+	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log}
 	if s.hc == nil {
 		s.hc = &http.Client{Timeout: 30 * time.Second}
 	}
 	if s.log == nil {
 		s.log = func(f string, a ...any) { fmt.Fprintf(os.Stderr, "login: "+f+"\n", a...) }
 	}
+	if cfg.Sessions.Persist {
+		s.cache = session.NewPersistent(&session.Store{Dir: cfg.Sessions.Dir})
+	} else {
+		s.cache = session.New()
+	}
+	s.cache.Log = s.log
 	s.notify = opt.Notifier
 	if s.notify == nil {
 		s.notify = &notify.DingTalk{Webhook: cfg.DingTalk.Webhook, Secret: cfg.DingTalk.Secret, Keyword: cfg.DingTalk.Keyword, Mobiles: cfg.DingTalk.Mobiles}

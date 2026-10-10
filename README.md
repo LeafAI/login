@@ -30,6 +30,9 @@ carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_T
 - Agent-supplied text (`reason`, SQL title/remark/SQL) is escaped before it is put in DingTalk markdown, so it
   cannot add links or formatting to the message the human acts on.
 - `security.allowed_hosts` limits which sites the agent can target.
+- `sessions.persist: true` stores logins in `~/.config/login/sessions/` (AES-256-GCM; key file next to it, both
+  0600). This keeps secrets out of backups and greps, but does not protect against other processes of the same
+  user. Every reuse is validated against the site first; stale entries are dropped.
 - Returned cookies/tokens are secrets handed to the agent by design; `login_sessions` never shows them.
 
 ## First run
@@ -63,6 +66,8 @@ web:
   page_url: https://leafai.github.io/login/v0.1.0/  # or file:///path/to/login-page/index.html
   ttl: 10m                                          # per round
 keys: {max_uses: 8, max_age: 24h}
+sessions:
+  persist: true               # keep logins (encrypted) so a new MCP server process reuses them; default false
 mcp: {max_block_seconds: 50}
 archery:
   allow_ddl: true            # false rejects CREATE/ALTER/DROP/TRUNCATE/RENAME

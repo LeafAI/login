@@ -4,9 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/LeafAI/login/internal/config"
+	"github.com/LeafAI/login/internal/site"
+	_ "github.com/LeafAI/login/internal/site/gitlab"
 
 	_ "github.com/LeafAI/login/internal/site/noauth"
 )
@@ -54,5 +57,35 @@ func TestAllowedHosts(t *testing.T) {
 		if denied == want {
 			t.Errorf("%s: allowed=%v but denied=%v", url, want, denied)
 		}
+	}
+}
+
+func TestPersistentSessionsSurviveRestart(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("_gitlab_session"); err != nil || c.Value != "persisted" {
+			http.Error(w, "no", 401)
+		}
+	}))
+	defer ts.Close()
+	dir := t.TempDir()
+	newServer := func() *Server {
+		cfg, _ := config.Load(dir + "/none.yaml")
+		cfg.Keys.Dir = dir + "/keys"
+		cfg.Sessions.Persist = true
+		_, s, err := New(cfg, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	first := newServer()
+	d, _ := site.Resolve("gitlab", nil)
+	base, _ := url.Parse(ts.URL)
+	first.cache.Put(base, d, &site.Session{Cookies: []*http.Cookie{{Name: "_gitlab_session", Value: "persisted"}}})
+
+	// "Restart": a brand-new server process reads the same store; no human is involved.
+	out, terr := newServer().ensureLogin(context.Background(), nil, ts.URL, "gitlab", "", false, true, 0)
+	if terr != nil || !out.Cached || out.CookieHeader != "_gitlab_session=persisted" {
+		t.Fatalf("restart: %+v %v", out, terr)
 	}
 }

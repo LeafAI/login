@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +19,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
+
+	"github.com/LeafAI/login/internal/filelock"
 )
 
 type Pool struct {
@@ -150,29 +151,7 @@ func readEntity(path string) (*openpgp.Entity, error) {
 	return list[0], nil
 }
 
-// lock is a portable cross-process lock (O_EXCL lock file with stale-lock takeover).
-func (p *Pool) lock() (func(), error) {
-	path := filepath.Join(p.Dir, ".lock")
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			f.Close()
-			return func() { os.Remove(path) }, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-		if st, serr := os.Stat(path); serr == nil && time.Since(st.ModTime()) > 15*time.Second {
-			os.Remove(path)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return nil, errors.New("keyring: timed out waiting for lock")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
+func (p *Pool) lock() (func(), error) { return filelock.Lock(filepath.Join(p.Dir, ".lock")) }
 
 // PublicKeyBinary is the transferable public key in binary OpenPGP packet form.
 func (k *Key) PublicKeyBinary() ([]byte, error) {
