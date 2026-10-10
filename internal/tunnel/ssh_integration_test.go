@@ -7,83 +7,22 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/LeafAI/login/internal/sshtest"
 )
 
-func freePort(t *testing.T) int {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
-}
-
-// TestRealSSHReverseForward starts a throwaway sshd and checks that a tunnel started by the runner
+// TestRealSSHReverseForward checks, against a throwaway sshd, that a tunnel started by the runner
 // really carries HTTP traffic from the "remote" port back to the local server.
 func TestRealSSHReverseForward(t *testing.T) {
-	for _, bin := range []string{"ssh", "sshd", "ssh-keygen"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not available", bin)
-		}
-	}
-	sshdPath, _ := exec.LookPath("sshd")
-	dir := t.TempDir()
-	run := func(name string, args ...string) {
-		if out, err := exec.Command(name, args...).CombinedOutput(); err != nil {
-			t.Skipf("%s %v: %v\n%s", name, args, err, out)
-		}
-	}
-	run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", filepath.Join(dir, "host"))
-	run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", filepath.Join(dir, "client"))
-	pub, _ := os.ReadFile(filepath.Join(dir, "client.pub"))
-	os.WriteFile(filepath.Join(dir, "authorized_keys"), pub, 0o600)
-	os.MkdirAll("/run/sshd", 0o755)
-	sshPort := freePort(t)
-	conf := fmt.Sprintf(`Port %d
-ListenAddress 127.0.0.1
-HostKey %s/host
-AuthorizedKeysFile %s/authorized_keys
-PidFile %s/sshd.pid
-UsePAM no
-StrictModes no
-PermitRootLogin yes
-PasswordAuthentication no
-AllowTcpForwarding yes
-`, sshPort, dir, dir, dir)
-	os.WriteFile(filepath.Join(dir, "sshd_config"), []byte(conf), 0o600)
-	sshd := exec.Command(sshdPath, "-D", "-e", "-f", filepath.Join(dir, "sshd_config"))
-	if err := sshd.Start(); err != nil {
-		t.Skipf("cannot start sshd: %v", err)
-	}
-	t.Cleanup(func() { sshd.Process.Kill(); sshd.Wait() })
-	for i := 0; ; i++ {
-		if c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", sshPort)); err == nil {
-			c.Close()
-			break
-		}
-		if i > 50 {
-			t.Skip("sshd did not come up")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
+	srv := sshtest.Start(t)
 	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "hello through the tunnel") }))
 	defer local.Close()
 	localPort := local.Listener.Addr().(*net.TCPAddr).Port
-	remotePort := freePort(t)
+	remotePort := sshtest.FreePort(t)
 
-	user := "root"
-	if u := os.Getenv("USER"); u != "" {
-		user = u
-	}
-	cmd := fmt.Sprintf("ssh -N -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -i %s/client -p %d -R 127.0.0.1:%d:localhost:{{port}} %s@127.0.0.1",
-		dir, sshPort, remotePort, user)
-	p, err := Custom("real-ssh", cmd, fmt.Sprintf("http://127.0.0.1:%d", remotePort), "")
+	p, err := Custom("real-ssh", srv.ReverseCommand(remotePort), fmt.Sprintf("http://127.0.0.1:%d", remotePort), "")
 	if err != nil {
 		t.Fatal(err)
 	}
