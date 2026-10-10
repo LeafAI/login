@@ -45,11 +45,14 @@ type LoginWaitInput struct {
 }
 
 type LoginOutput struct {
-	Status       string            `json:"status"` // ok | pending
-	Site         string            `json:"site,omitempty"`
-	BaseURL      string            `json:"base_url,omitempty"`
-	Auth         string            `json:"auth,omitempty"` // cookie | bearer | none
-	Cached       bool              `json:"cached,omitempty"`
+	Status  string `json:"status"` // ok | pending
+	Site    string `json:"site,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Auth    string `json:"auth,omitempty"` // cookie | bearer | none
+	Cached  bool   `json:"cached,omitempty"`
+	// Redacted is true when the credentials were withheld on purpose: the site's tools (archery_*) use the
+	// session on the agent's behalf.
+	Redacted     bool              `json:"redacted,omitempty"`
 	CookieHeader string            `json:"cookie_header,omitempty"`
 	Cookies      []CookieOut       `json:"cookies,omitempty"`
 	Headers      map[string]string `json:"headers,omitempty"`

@@ -25,8 +25,23 @@ func loginArchery(t *testing.T, e *env, fake *httptest.Server) {
 	}
 	human(t, e.rec.wait(t, 1), e.dir, "submit", `{"username":"alice","password":"pw"}`, "")
 	out, isErr := e.call(t, "login_wait", map[string]any{"login_id": out["login_id"], "max_block_seconds": 20})
-	if isErr || out["status"] != "ok" || !strings.Contains(out["cookie_header"].(string), "sessionid=S") {
+	if isErr || out["status"] != "ok" || out["redacted"] != true {
 		t.Fatalf("archery login: %v", out)
+	}
+	// The agent never holds Archery's session: the archery_* tools use it on its behalf.
+	raw := fmt.Sprint(out)
+	for _, secret := range []string{"sessionid", "csrftoken", "X-CSRFToken", "cookie_header"} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("an Archery login result must not carry %q: %v", secret, out)
+		}
+	}
+	if out["site"] != "archery" || out["auth"] != "cookie" {
+		t.Errorf("the result still says which site and how it authenticates: %v", out)
+	}
+	// ...and a repeated login (cached) is redacted too.
+	again, _ := e.call(t, "login", map[string]any{"url": fake.URL, "site": "archery"})
+	if again["cached"] != true || again["redacted"] != true || strings.Contains(fmt.Sprint(again), "sessionid") {
+		t.Fatalf("cached archery login: %v", again)
 	}
 }
 
