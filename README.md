@@ -75,6 +75,12 @@ archery:
   wait_timeout: 30m          # default approval timeout
 security:
   allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
+site_options:                # driver-specific settings
+  gitlab:                    # LDAP-enabled GitLab: the LDAP tab is used automatically
+    login_method: auto       # auto | ldap | standard (standard = local GitLab accounts)
+    ldap_provider: ldapmain  # only if it differs from the name in the sign-in form
+  kubesphere:                # LDAP users must log in through /oauth/login/<provider>
+    identity_provider: auto  # auto (first LDAPIdentityProvider) | local | <provider name>
 roots:                       # sites served under a path prefix: host -> full base URL
   elk.corp.example: https://elk.corp.example/kibana
 aliases:                     # hostnames that do not hint at the product
@@ -121,8 +127,10 @@ of both generations, then exercised against fake servers that reproduce those co
 error pages).
 
 **Not verified against live systems:** the real SSH provider services (use `login doctor -tunnel`), a real DingTalk robot, and the live
-GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. **GitLab** was checked against the GitLab source for both page generations (classic server-rendered forms and
-current GitLab's Vue sign-in and 2FA steps). **Kibana**'s login route and provider discovery were checked against
+GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. **GitLab** was checked against the GitLab source (16.8 and master): classic server-rendered forms, the LDAP tab
+(`/users/auth/<provider>/callback`) and current GitLab's Vue sign-in and 2FA steps. **KubeSphere** 3.4.1 was checked
+against its source: LDAP users must use `/oauth/login/<provider>` (the local `/oauth/token` grant cannot
+authenticate them), and the provider is discovered from the published OAuth config. **Kibana**'s login route and provider discovery were checked against
 its source. **Nightingale** (v7) was checked against its source: login payload, the optional math-image captcha (shown to
-the human inside the login step) and optional RSA password encryption. **KubeSphere** (not yet source-checked) and Kibana have no
+the human inside the login step) and optional RSA password encryption. Kibana has no
 TOTP in stock form; their OTP retry path is a guess for custom setups and has never run against a real one.

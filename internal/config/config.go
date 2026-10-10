@@ -24,6 +24,8 @@ type Config struct {
 	// Aliases maps a hostname (or host:port) to a site driver name, for sites whose hostname does not
 	// hint at the product, e.g. "es.corp.example": kibana.
 	Aliases map[string]string `yaml:"aliases"`
+	// SiteOptions passes driver-specific settings by driver name, e.g. kubesphere: {identity_provider: ldap}.
+	SiteOptions map[string]map[string]string `yaml:"site_options"`
 	// Roots maps a hostname (or host:port) to the full base URL of a site served under a path prefix,
 	// e.g. "elk.corp.example": "https://elk.corp.example/kibana".
 	Roots   map[string]string `yaml:"roots"`

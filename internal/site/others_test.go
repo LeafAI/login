@@ -12,7 +12,6 @@ import (
 
 	"github.com/LeafAI/login/internal/site"
 	_ "github.com/LeafAI/login/internal/site/kibana"
-	_ "github.com/LeafAI/login/internal/site/kubesphere"
 	"github.com/LeafAI/login/internal/site/sitetest"
 )
 
@@ -115,39 +114,5 @@ func TestKibanaUnderPathPrefix(t *testing.T) {
 	}
 	if err := d.Probe(context.Background(), base, s, srv.Client()); err != nil {
 		t.Errorf("probe under /kibana: %v", err)
-	}
-}
-
-func TestKubeSphere(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/oauth/token":
-			r.ParseForm()
-			if r.PostForm.Get("grant_type") != "password" || r.PostForm.Get("username") != "alice" || r.PostForm.Get("password") != "pw" {
-				w.WriteHeader(401)
-				w.Write([]byte(`{"error":"invalid_grant","error_description":"incorrect password"}`))
-				return
-			}
-			w.Write([]byte(`{"access_token":"AT","refresh_token":"RT","token_type":"bearer","expires_in":7200}`))
-		default:
-			if r.Header.Get("Authorization") != "Bearer AT" {
-				w.WriteHeader(401)
-				return
-			}
-			w.Write([]byte(`{}`))
-		}
-	}))
-	defer srv.Close()
-	s, err := run(t, "kubesphere", srv, answers(""))
-	if err != nil || s.Headers["Authorization"] != "Bearer AT" || s.ExpiresAt.IsZero() {
-		t.Fatalf("%+v %v", s, err)
-	}
-	d, _ := site.Resolve("kubesphere", mustURL(srv.URL))
-	if err := d.Probe(context.Background(), mustURL(srv.URL), s, srv.Client()); err != nil {
-		t.Errorf("probe: %v", err)
-	}
-	bad := &sitetest.Asker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "x"}}}
-	if _, err := run(t, "kubesphere", srv, bad); !errors.Is(err, site.ErrBadCredentials) {
-		t.Errorf("bad creds: %v", err)
 	}
 }

@@ -112,3 +112,22 @@ func TestRootsSupplyPathPrefix(t *testing.T) {
 		t.Fatalf("with roots: %+v %v", out, terr)
 	}
 }
+
+func TestSiteOptionsValidation(t *testing.T) {
+	mk := func(opts map[string]map[string]string) error {
+		cfg, _ := config.Load(t.TempDir() + "/none.yaml")
+		cfg.Keys.Dir = t.TempDir()
+		cfg.SiteOptions = opts
+		_, _, err := New(cfg, Options{})
+		return err
+	}
+	if err := mk(map[string]map[string]string{"gitlab": {"login_method": "ldap"}, "kubesphere": {"identity_provider": "ldap"}}); err != nil {
+		t.Errorf("valid options rejected: %v", err)
+	}
+	if err := mk(map[string]map[string]string{"nope": {"a": "b"}}); err == nil {
+		t.Error("unknown driver accepted")
+	}
+	if err := mk(map[string]map[string]string{"skywalking": {"a": "b"}}); err == nil {
+		t.Error("driver without options accepted")
+	}
+}

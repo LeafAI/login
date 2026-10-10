@@ -50,6 +50,11 @@ type Driver interface {
 	Probe(ctx context.Context, base *url.URL, s *Session, hc *http.Client) error
 }
 
+// Configurable drivers accept per-site options from the `site_options:` config section.
+type Configurable interface {
+	Configure(opts map[string]string)
+}
+
 // Asker runs one human round (mode "login", "totp", ...) and returns the submitted fields.
 type Asker interface {
 	Ask(ctx context.Context, mode string, fields []Field) (Credentials, error)

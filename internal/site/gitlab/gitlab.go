@@ -4,6 +4,14 @@
 // forms (inputs named user[login], user[password], user[otp_attempt]) and current GitLab, whose sign-in and
 // 2FA steps are Vue components (the 2FA page only carries <div id="js-2fa" data-totp-enabled=...>). Both post
 // the same fields to /users/sign_in; the CSRF token comes from a hidden input or the csrf-token meta tag.
+//
+// LDAP: when LDAP is enabled, the sign-in page has an LDAP tab whose form posts username/password to
+// /users/auth/<provider>/callback (provider usually "ldapmain"); LDAP users can not use the standard form.
+// The driver uses the LDAP form when the page offers one ("auto"), unless site_options say otherwise:
+//
+//	login_method: auto | ldap | standard      ldap_provider: ldapmain (name from the form action)
+//
+// After either form, a TOTP prompt (classic or Vue page) is answered through the OTP form at /users/sign_in.
 package gitlab
 
 import (
@@ -14,18 +22,34 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/LeafAI/login/internal/site"
 )
 
-type driver struct{}
+type driver struct {
+	mu   sync.RWMutex
+	opts map[string]string
+}
 
-func init() { site.Register(driver{}) }
+func init() { site.Register(&driver{}) }
 
-func (driver) Name() string     { return "gitlab" }
-func (driver) NeedsLogin() bool { return true }
-func (driver) Match(u *url.URL) bool {
+func (*driver) Name() string     { return "gitlab" }
+func (*driver) NeedsLogin() bool { return true }
+func (*driver) Match(u *url.URL) bool {
 	return strings.Contains(strings.ToLower(u.Hostname()), "gitlab")
+}
+
+func (d *driver) Configure(opts map[string]string) {
+	d.mu.Lock()
+	d.opts = opts
+	d.mu.Unlock()
+}
+
+func (d *driver) option(k string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return strings.TrimSpace(d.opts[k])
 }
 
 var (
@@ -43,7 +67,7 @@ func csrf(body string) string {
 	return ""
 }
 
-func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http.Client) (*site.Session, error) {
+func (d *driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http.Client) (*site.Session, error) {
 	c := site.JarClient(hc)
 	creds, err := ask.Ask(ctx, "login", site.LoginFields)
 	if err != nil {
@@ -53,16 +77,16 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 	if err != nil {
 		return nil, err
 	}
-	tok := csrf(page)
+	loginPath, fields, err := d.form(page, creds)
+	if err != nil {
+		return nil, err
+	}
+	tok := csrfIn(page, loginPath)
 	if tok == "" {
 		return nil, fmt.Errorf("%w: gitlab sign-in page has no CSRF token (is this GitLab?)", site.ErrLoginRejected)
 	}
-	body, finalPath, err := post(ctx, c, base, url.Values{
-		"authenticity_token": {tok},
-		"user[login]":        {creds["username"]},
-		"user[password]":     {creds["password"]},
-		"user[remember_me]":  {"0"},
-	})
+	fields.Set("authenticity_token", tok)
+	body, finalPath, err := post(ctx, c, base, loginPath, fields)
 	if err != nil {
 		return nil, err
 	}
@@ -75,8 +99,8 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 		if err != nil {
 			return nil, err
 		}
-		body, finalPath, err = post(ctx, c, base, url.Values{
-			"authenticity_token": {csrf(body)},
+		body, finalPath, err = post(ctx, c, base, "/users/sign_in", url.Values{
+			"authenticity_token": {csrfIn(body, "/users/sign_in")},
 			"user[otp_attempt]":  {strings.TrimSpace(code["code"])},
 			"user[remember_me]":  {"0"},
 			"two_factor_method":  {"totp"},
@@ -97,6 +121,42 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 		return nil, fmt.Errorf("%w: no session cookie was issued", site.ErrLoginRejected)
 	}
 	return s, nil
+}
+
+var ldapForm = regexp.MustCompile(`action=["'](/users/auth/(ldap[A-Za-z0-9_]*)/callback)["']`)
+
+// form decides which sign-in form to use and builds its fields (without the CSRF token).
+func (d *driver) form(page string, creds site.Credentials) (path string, fields url.Values, err error) {
+	method := d.option("login_method")
+	provider := d.option("ldap_provider")
+	var found string
+	if m := ldapForm.FindStringSubmatch(page); m != nil {
+		found = m[2]
+	}
+	useLDAP := method == "ldap" || (method == "" || method == "auto") && found != ""
+	if useLDAP {
+		if provider == "" {
+			provider = found
+		}
+		if provider == "" {
+			provider = "ldapmain"
+		}
+		return "/users/auth/" + provider + "/callback", url.Values{
+			"username": {creds["username"]}, "password": {creds["password"]}, "remember_me": {"0"}}, nil
+	}
+	return "/users/sign_in", url.Values{
+		"user[login]": {creds["username"]}, "user[password]": {creds["password"]}, "user[remember_me]": {"0"}}, nil
+}
+
+// csrfIn extracts the authenticity token of the form posting to action (Rails may issue per-form tokens),
+// falling back to any token on the page.
+func csrfIn(body, action string) string {
+	for _, m := range regexp.MustCompile(`(?s)<form[^>]*action=["']`+regexp.QuoteMeta(action)+`["'].*?</form>`).FindAllString(body, -1) {
+		if t := csrf(m); t != "" {
+			return t
+		}
+	}
+	return csrf(body)
 }
 
 var (
@@ -135,18 +195,18 @@ func get(ctx context.Context, c *http.Client, base *url.URL, path string) (strin
 	return site.ReadBody(resp), nil
 }
 
-func post(ctx context.Context, c *http.Client, base *url.URL, form url.Values) (body, finalPath string, err error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base.String()+"/users/sign_in", strings.NewReader(form.Encode()))
+func post(ctx context.Context, c *http.Client, base *url.URL, path string, form url.Values) (body, finalPath string, err error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base.String()+path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("%w: %v", site.ErrUnreachable, err)
 	}
-	finalPath = resp.Request.URL.Path
+	finalPath = strings.TrimPrefix(resp.Request.URL.Path, base.Path)
 	return site.ReadBody(resp), finalPath, nil
 }
 
-func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *http.Client) error {
+func (*driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *http.Client) error {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/api/v4/user", nil)
 	req.Header.Set("Cookie", site.CookieHeader(s.Cookies))
 	resp, err := hc.Do(req)

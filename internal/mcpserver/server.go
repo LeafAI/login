@@ -53,6 +53,17 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 		}
 		site.Replace(d)
 	}
+	for name, opts := range cfg.SiteOptions {
+		d, err := site.Resolve(name, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("site_options: %w", err)
+		}
+		c, ok := d.(site.Configurable)
+		if !ok {
+			return nil, nil, fmt.Errorf("site_options: driver %q has no options", name)
+		}
+		c.Configure(opts)
+	}
 	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log}
 	if s.hc == nil {
 		s.hc = &http.Client{Timeout: 30 * time.Second}
