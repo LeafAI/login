@@ -25,6 +25,15 @@ claude mcp add login -- login          # or add "login" to any MCP client's serv
 The static page is served by GitHub Pages (version-pinned) or from your disk (`login page [dir]`); the tunnel
 carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_TOOLS.md` (tool schemas).
 
+## First run
+
+```
+login doctor                 # checks config, ssh, key dir, providers
+login doctor -tunnel         # starts each tunnel provider and fetches a page through it
+login doctor -send           # posts a test message through the DingTalk robot
+login page [dir]             # writes the static login page for local use
+```
+
 ## Configuration
 
 `~/.config/login/config.yaml` (override with `-config`). Environment: `LOGIN_DINGTALK_WEBHOOK`,
@@ -52,6 +61,9 @@ archery:
   allow_ddl: true            # false rejects CREATE/ALTER/DROP/TRUNCATE/RENAME
   default_group: dba         # Archery resource group when a call gives none
   wait_timeout: 30m          # default approval timeout
+aliases:                     # hostnames that do not hint at the product
+  es.corp.example: kibana
+  apm.corp.example: skywalking
 sites:                       # any other website, no Go needed
   - name: grafana
     match_host: grafana
@@ -68,17 +80,26 @@ sites:                       # any other website, no Go needed
 Long operations return a `pending` result with an id after `max_block_seconds`; resume with `login_wait` /
 `archery_wait`.
 
+## Adding a website
+
+Describe it in YAML (`sites:` above), or write a Go driver: implement `site.Driver` in
+`internal/site/<name>/`, call `site.Register` in `init()`, blank-import it in `main.go`. A driver asks the human
+through `ask.Ask(ctx, "login", ...)` and, when the site wants a second factor, again with `"totp"`; the flow
+turns each call into its own DingTalk link. Return `site.ErrBadCredentials`, `ErrLoginRejected` or
+`ErrUnreachable` (wrapped) so the agent gets a precise error code.
+
 ## Testing
 
-`go test ./...` — unit tests, fake-site driver tests, and (when Node + Playwright + Chromium exist) browser
-end-to-end tests that drive the real page through the full MCP → DingTalk → tunnel → decrypt → login path.
+`go test ./...` — unit tests, fake-site driver tests, a real `ssh`/`sshd` reverse-tunnel test (skipped without
+them), and (when Node + Playwright + Chromium exist) browser end-to-end tests that drive the real page through the full MCP → DingTalk → tunnel → decrypt → login path.
 
 ## What has and has not been verified
 
 Verified in automated tests: key rotation, PGP round trip between openpgp.js and Go, round API validation,
-tunnel banner parsing and fallback (with a fake `ssh`), DingTalk signing, the full login/2FA/reject flow in a
+tunnel banner parsing and fallback (with a fake `ssh`), real HTTP traffic through a real `ssh -R` forward
+(local `sshd`), `ssh` accepting every built-in provider command line, DingTalk signing, the full login/2FA/reject flow in a
 real browser, and every site driver against *fake* servers that imitate the flows.
-**Not verified against live systems:** the real SSH providers, a real DingTalk robot, and the live
+**Not verified against live systems:** the real SSH provider services (use `login doctor -tunnel`), a real DingTalk robot, and the live
 GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. In particular the Archery 2FA and workflow-list/result
 endpoints, and the second-factor handling of Kibana/KubeSphere/Nightingale (stock versions of these have no
 TOTP), are best-effort and need a live check.

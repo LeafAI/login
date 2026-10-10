@@ -1,0 +1,138 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/LeafAI/login/internal/config"
+	"github.com/LeafAI/login/internal/mcpserver"
+	"github.com/LeafAI/login/internal/notify"
+	"github.com/LeafAI/login/internal/tunnel"
+)
+
+// runDoctor checks the local setup. Flags: -config, -tunnel (really start each tunnel provider),
+// -send (post a test message to DingTalk).
+func runDoctor(args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	cfgPath := fs.String("config", config.DefaultPath(), "config file")
+	doTunnel := fs.Bool("tunnel", false, "start each configured tunnel provider and fetch a page through it")
+	doSend := fs.Bool("send", false, "send a test message through the DingTalk robot")
+	fs.Parse(args)
+
+	bad := 0
+	report := func(ok bool, what, detail string) {
+		mark := "ok  "
+		if !ok {
+			mark, bad = "FAIL", bad+1
+		}
+		fmt.Printf("[%s] %s", mark, what)
+		if detail != "" {
+			fmt.Printf(": %s", detail)
+		}
+		fmt.Println()
+	}
+
+	_, statErr := os.Stat(*cfgPath)
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		report(false, "config", err.Error())
+		return 1
+	}
+	if statErr != nil {
+		fmt.Printf("[note] no config file at %s (defaults + environment are used)\n", *cfgPath)
+	} else {
+		report(true, "config", *cfgPath)
+	}
+
+	report(cfg.DingTalk.Webhook != "", "dingtalk webhook", map[bool]string{true: "configured", false: "missing (dingtalk.webhook or LOGIN_DINGTALK_WEBHOOK)"}[cfg.DingTalk.Webhook != ""])
+	if _, err := url.Parse(cfg.Web.PageURL); err != nil {
+		report(false, "web.page_url", err.Error())
+	} else {
+		fmt.Printf("[note] login links point at %s\n", cfg.Web.PageURL)
+	}
+	if err := os.MkdirAll(cfg.Keys.Dir, 0o700); err != nil {
+		report(false, "key directory", err.Error())
+	} else {
+		report(true, "key directory", cfg.Keys.Dir)
+	}
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		report(false, "ssh client", "not found in PATH; tunnels cannot start")
+	} else {
+		report(true, "ssh client", ssh)
+	}
+	providers, err := mcpserver.Providers(cfg)
+	if err != nil {
+		report(false, "tunnel providers", err.Error())
+	} else {
+		var names []string
+		for _, p := range providers {
+			names = append(names, p.Name)
+		}
+		report(true, "tunnel providers", strings.Join(names, ", "))
+	}
+	if !cfg.Archery.DDLAllowed() {
+		fmt.Println("[note] archery.allow_ddl is false: DDL will be refused")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if *doTunnel && providers != nil && ssh != "" {
+		doctorTunnels(ctx, cfg, providers, report)
+	}
+	if *doSend {
+		d := &notify.DingTalk{Webhook: cfg.DingTalk.Webhook, Secret: cfg.DingTalk.Secret, Keyword: cfg.DingTalk.Keyword, Mobiles: cfg.DingTalk.Mobiles}
+		err := d.Markdown(ctx, "login doctor", "### login doctor\n\nThis is a test message from `login doctor`. No action needed.")
+		if err != nil {
+			report(false, "dingtalk test message", err.Error())
+		} else {
+			report(true, "dingtalk test message", "sent; check the chat")
+		}
+	}
+	if !*doTunnel || !*doSend {
+		fmt.Println("[note] add -tunnel to test the tunnel providers and -send to test DingTalk")
+	}
+	if bad > 0 {
+		return 1
+	}
+	return 0
+}
+
+func doctorTunnels(ctx context.Context, cfg *config.Config, providers []*tunnel.Provider, report func(bool, string, string)) {
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "login-doctor") }))
+	defer local.Close()
+	u, _ := url.Parse(local.URL)
+	var port int
+	fmt.Sscanf(u.Port(), "%d", &port)
+	r := &tunnel.Runner{Timeout: cfg.Tunnel.Timeout}
+	for _, p := range providers {
+		if p.Kind != tunnel.HTTP {
+			fmt.Printf("[note] tunnel %s is TCP-only and is skipped\n", p.Name)
+			continue
+		}
+		start := time.Now()
+		tn, err := r.Start(ctx, []*tunnel.Provider{p}, port)
+		if err != nil {
+			report(false, "tunnel "+p.Name, err.Error())
+			continue
+		}
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Get(tn.URL)
+		if err != nil {
+			report(false, "tunnel "+p.Name, tn.URL+" came up but fetching it failed: "+err.Error())
+		} else {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 100))
+			resp.Body.Close()
+			report(strings.Contains(string(b), "login-doctor"), "tunnel "+p.Name, fmt.Sprintf("%s (%s)", tn.URL, time.Since(start).Round(100*time.Millisecond)))
+		}
+		tn.Close()
+	}
+}

@@ -155,7 +155,8 @@ func (s *Server) maxBlock(override int) time.Duration {
 	return time.Duration(n) * time.Second
 }
 
-func newTunnelStarter(cfg *config.Config, log func(string, ...any)) (flow.TunnelStarter, error) {
+// Providers returns the configured tunnel providers in order.
+func Providers(cfg *config.Config) ([]*tunnel.Provider, error) {
 	b := tunnel.Builtins()
 	for _, c := range cfg.Tunnel.Custom {
 		p, err := tunnel.Custom(c.Name, c.Command, c.URL, c.URLRegex)
@@ -172,6 +173,14 @@ func newTunnelStarter(cfg *config.Config, log func(string, ...any)) (flow.Tunnel
 			return nil, fmt.Errorf("tunnel.order: unknown provider %q", name)
 		}
 		list = append(list, p)
+	}
+	return list, nil
+}
+
+func newTunnelStarter(cfg *config.Config, log func(string, ...any)) (flow.TunnelStarter, error) {
+	list, err := Providers(cfg)
+	if err != nil {
+		return nil, err
 	}
 	return &tunnelStarter{providers: list, runner: &tunnel.Runner{Timeout: cfg.Tunnel.Timeout, Log: log}}, nil
 }

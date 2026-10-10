@@ -53,6 +53,9 @@ func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw,
 	if terr != nil {
 		return nil, terr
 	}
+	if siteName == "" {
+		siteName = s.alias(base)
+	}
 	d, err := site.Resolve(siteName, base)
 	if err != nil {
 		return nil, errf("unsupported_site", false, "%v", err)
@@ -234,4 +237,14 @@ func (s *Server) logout(_ context.Context, _ *mcp.CallToolRequest, in LogoutInpu
 		n++
 	}
 	return LogoutOutput{Removed: n}, nil
+}
+
+// alias returns the configured site name for a host, if any.
+func (s *Server) alias(base *url.URL) string {
+	for _, k := range []string{base.Host, base.Hostname()} {
+		if n, ok := s.cfg.Aliases[k]; ok {
+			return n
+		}
+	}
+	return ""
 }
