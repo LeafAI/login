@@ -2,9 +2,16 @@
 
 How to set `login` up, check it before the first real use, and fix the usual problems.
 
+## 0. The quick way
+
+`login config init` asks for the DingTalk robot and the safety settings and can send a test message;
+`login config site add <url>` sets up one website. Everything below explains the same settings if you prefer
+to edit `config.yaml` by hand. `login config show` prints the file with secrets masked, and every `login config`
+change keeps the previous file as `config.yaml.bak`.
+
 ## 1. What you need
 
-* Go 1.25+ to install: `go install github.com/LeafAI/login@latest`
+* Go 1.25+ to install: `go install github.com/LeafAI/login@latest`, or the Docker image (see the README).
 * An outbound `ssh` client and network access to at least one tunnel provider (or your own jump server).
 * A DingTalk **custom robot** in the group chat of whoever will type the credentials.
 * Register the server with your MCP client, e.g. `claude mcp add login -- login`.
@@ -62,6 +69,17 @@ Use `login doctor -site <url>` for every site before the first login. It needs n
 Host names rarely contain the product name, so add `aliases:` (`es.corp.example: kibana`) and, to limit what the
 agent may target, `security.allowed_hosts`.
 
+### Audit log and request limits
+
+* `audit.jsonl` (next to the config; 0600) gets one JSON line per tool call, per request that reached a person and
+  per refusal. It records who (MCP client name), which host, the reason the agent gave and the result. It never
+  holds cookies, tokens, passwords or SQL text (only its length and a short hash).
+  Handy questions: `grep '"event":"human_request"' audit.jsonl` (which logins reached a person),
+  `grep '"event":"human_round"' audit.jsonl` (every message sent: password, TOTP, ...), `grep rate_limited audit.jsonl`.
+* `limits:` stops an over-eager agent from flooding the DingTalk group: by default 6 requests per site and 20 overall
+  per hour, and a 10-minute pause for a site after somebody pressed Reject. Raise them with
+  `login config set limits.per_site 12`. Cached sessions never count.
+
 ## 6. First-run checklist
 
 1. `login doctor` – config, ssh, providers.
@@ -84,6 +102,7 @@ agent may target, `security.allowed_hosts`.
 | `login_rejected` | the site refused for another reason (locked, captcha, unsupported 2FA, wrong URL) | read the message; `login doctor -site` often shows why |
 | `site_unreachable` | the site could not be contacted | network/proxy/DNS; check `roots:` path prefix |
 | `session_expired` | a cached session was rejected | call `login` with `force_refresh` |
+| `rate_limited` | people were asked too often, or the site was just rejected | wait for the retry time; do not loop. Raise `limits:` only if the volume is legitimate |
 | `unsupported_site` | no driver for that host | add `aliases:` or pass `site` |
 | `host_not_allowed` | outside `security.allowed_hosts` | add the host if intended |
 | `ddl_disabled` / `sql_check_failed` / `archery_error` | Archery tool refusals | see `MCP_TOOLS.md` |

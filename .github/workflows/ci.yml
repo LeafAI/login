@@ -20,3 +20,10 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
+      - run: go build -ldflags "-X github.com/LeafAI/login/internal/mcpserver.Version=ci" -o /tmp/login . && /tmp/login version
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t login:ci --build-arg VERSION=ci .
+      - run: docker run --rm login:ci version

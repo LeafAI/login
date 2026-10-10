@@ -38,6 +38,19 @@ carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_T
   user. Every reuse is validated against the site first; stale entries are dropped.
 - Returned cookies/tokens are secrets handed to the agent by design; `login_sessions` never shows them.
 
+## Set it up without editing YAML
+
+```
+login config init                 # DingTalk robot + safety settings, with a test message
+login config site add https://gitlab.corp.example   # detects the driver, asks that driver's own questions
+login config site custom          # any other website: answer questions, no YAML
+login config set                  # list every setting; `set <key> <value>`, `get`, `unset`, `show`
+```
+
+Each change is checked before it is saved (a typo such as `dingtalk.webhok` is refused with a suggestion), the
+file stays private (0600), your comments are kept and the previous version is saved as `config.yaml.bak`.
+Secrets are asked without echo and shown masked.
+
 ## First run
 
 See `docs/OPERATING.md` for the full operator guide (setup order, per-site config, troubleshooting).
@@ -81,6 +94,13 @@ archery:
   wait_timeout: 30m          # default approval timeout
 security:
   allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
+audit:
+  enabled: true              # default; JSON lines (who/what/when, never secrets) in audit.jsonl next to this file
+limits:                      # protect people from request floods; only requests that reach a person count
+  per_site: 6                # per window (defaults shown)
+  total: 20
+  window: 1h
+  reject_cooldown: 10m       # after a Reject, that site is paused
 site_options:                # driver-specific settings
   gitlab:                    # LDAP-enabled GitLab: the LDAP tab is used automatically
     login_method: auto       # auto | ldap | standard (standard = local GitLab accounts)
@@ -101,9 +121,12 @@ sites:                       # any other website, no Go needed
     probe: {path: /api/user}
 ```
 
-## Tools
+## Tools and resources
 
-`login`, `login_wait`, `login_sites`, `login_sessions`, `logout`, `archery_instances`, `archery_query`,
+Every tool has a title and an output schema. Read-only resources: `login://sites`, `login://sessions`,
+`login://policy` (the limits that apply to the agent). The server also sends instructions on how to use the tools.
+
+`login`, `login_wait`, `login_sites`, `login_sessions`, `logout`, `archery_instances`, `archery_groups`, `archery_query`,
 `archery_run_sql`, `archery_wait`, `archery_workflow_status`, `archery_cancel`.
 Long operations return a `pending` result with an id after `max_block_seconds`; resume with `login_wait` /
 `archery_wait`.
@@ -118,8 +141,25 @@ turns each call into its own DingTalk link. Return `site.ErrBadCredentials`, `Er
 
 ## Testing
 
-`go test ./...` — unit tests, fake-site driver tests, a real `ssh`/`sshd` reverse-tunnel test (skipped without
+`go test ./...` — unit tests, the config wizards, the audit log and rate limits, MCP output schemas validated against real results, fake-site driver tests, a real `ssh`/`sshd` reverse-tunnel test (skipped without
 them), and (when Node + Playwright + Chromium exist) browser end-to-end tests that drive the real page through the full MCP → DingTalk → tunnel → decrypt → login path.
+
+## Docker
+
+```
+docker build -t login --build-arg VERSION=$(git describe --tags --always) .
+docker run -it --rm -v login-data:/home/login/.config/login login config init
+docker run -i --rm -v login-data:/home/login/.config/login login          # the MCP server (stdio)
+```
+
+The image contains `ssh` (tunnels), runs as a non-root user and keeps config, keys and the audit log in the volume.
+`login version` prints the build.
+
+## Roadmap
+
+Sharing one gateway between several agents (network transport, caller identity, session isolation), keeping
+credentials away from the agent (`login_request`), token renewal and more authentication methods are planned:
+see `docs/ROADMAP.md`.
 
 ## What has and has not been verified
 

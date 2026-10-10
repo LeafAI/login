@@ -4,6 +4,7 @@
 // Usage:
 //
 //	login [-config file]        serve MCP over stdio
+//	login version               print the version
 //	login page [dir]            write the static login page (to open locally instead of GitHub Pages)
 //	login doctor [-tunnel] [-send]  check the setup, try the tunnel providers, send a test DingTalk message
 //	login config <command>      guided, validated editing of the config file (init, site add, set, show, ...)
@@ -50,6 +51,11 @@ func main() {
 		}
 		fmt.Printf("wrote the login page to %s\nOpen %s/index.html in a browser, then paste the link from DingTalk\n"+
 			"(or set web.page_url to file://%s/index.html so links point at this copy).\n", abs, abs, abs)
+		return
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(versionLine())
 		return
 	}
 

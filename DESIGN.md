@@ -1,6 +1,6 @@
 # login — MCP server for human-assisted website login
 
-Status: **design draft, no code yet.** Module: `github.com/LeafAI/login`.
+Status: **implemented (stdio MCP server)**; later stages are tracked in `docs/ROADMAP.md`. Module: `github.com/LeafAI/login`.
 Install: `go install github.com/LeafAI/login@latest` (binary `login`, `main.go` at repo root).
 
 ## 1. Goal
@@ -44,7 +44,10 @@ listener closes. TTL (default 10 min) closes it too.
 ```
 main.go                      # package main: flags/config, wire everything, serve MCP on stdio
 internal/
-  mcpserver/                 # tool registration (login, login_sessions, logout, archery_*)
+  mcpserver/                 # tool registration (login, login_sessions, logout, archery_*), resources, audit hooks
+  audit/                     # append-only JSON-lines activity log (metadata only)
+  ratelimit/                 # per-site / overall request limits and the cool-down after a Reject
+  configedit/ configcli/     # `login config`: validated, comment-preserving edits and the guided wizards
   keyring/                   # GPG key pool (≤8), generate/reuse, armored export, decrypt
   api/                       # one-shot JSON API behind the tunnel: /submit, /status per round (no HTML)
   web/                       # static login.html + vendored openpgp.min.js (go:embed; see 4.3)
@@ -236,10 +239,46 @@ Execution after approval is **automatic** (decided). Safeguards: never auto-appr
 after Archery reports the workflow approved. DDL is allowed by default; set `archery.allow_ddl: false`
 in the config to refuse it.
 
+### 5.1 Resources and server instructions
+
+Besides tools the server exposes three read-only resources and sends instructions at connect time:
+
+| URI | Content |
+|---|---|
+| `login://sites` | supported sites (same data as `login_sites`) |
+| `login://sessions` | which sites are logged in; never the cookies or tokens |
+| `login://policy` | allowed hosts, blocking time, request limits, DDL switch, audit on/off; no secrets |
+
+The instructions tell the agent the call pattern (`login` -> `login_wait`), how to react to each error code
+(`user_rejected`, `rate_limited`, `host_not_allowed`, `session_expired`) and that cookies are secrets. Every
+tool carries a title and a generated output schema; results are validated against them in the tests.
+
+### 5.2 Audit log and request limits
+
+* **Audit** (`audit:`). One JSON line per tool call (`tool_call`), per login request that reaches a person
+  (`human_request`), per message sent to a person (`human_round`, with `mode` and `round`: a login with TOTP
+  shows `login:1` then `totp:2`) and per refusal (`rate_limited`): time, tool, MCP client name/version, site, host, the
+  reason the agent gave, result or error code, duration. For SQL only the length and a 12-character SHA-256
+  prefix are kept. Cookies, tokens, passwords and SQL text never appear. File mode 0600; a write failure is
+  reported on stderr and never fails the call. On by default, file next to the config.
+* **Limits** (`limits:`). Only requests that actually reach a person count; a cached session is free and a
+  caller joining a running flow is not counted again. Defaults: 6 per site and 20 overall per hour, and a
+  10-minute pause for a site after the person pressed Reject. A refused request returns `rate_limited`
+  (retryable, with a hint not to loop) and sends no message.
+
+### 5.3 `login config`
+
+Editing YAML by hand is easy to get wrong, so the CLI does it: `init` (DingTalk and safety), `site add`
+(driver detection, path prefix and the driver's own options), `site custom` (describe any login form by
+answering questions), `set/get/unset/show/path`. Each driver declares its options (`site.Optioned`), so the
+wizard asks exactly what that driver needs. Every change is parsed strictly (unknown keys are errors), checked
+the way the server will use it, written atomically (0600), and the previous file is kept as `.bak`. Comments
+and key order in the user's file survive. Secrets are asked without echo and masked when displayed.
+
 ## 6. Configuration
 
 `~/.config/login/config.yaml`, env overrides `LOGIN_DINGTALK_WEBHOOK`, `LOGIN_DINGTALK_SECRET`,
-`LOGIN_TUNNEL_ORDER`. Sections: `dingtalk`, `tunnel`, `keys`, `sessions`, `sites`, `archery`.
+`LOGIN_TUNNEL_ORDER`. Sections: `dingtalk`, `tunnel`, `keys`, `web`, `mcp`, `sessions`, `security`, `audit`, `limits`, `site_options`, `aliases`, `roots`, `sites`, `archery`. `login config` edits them.
 MCP registration: `claude mcp add login -- login`.
 
 ## 7. Testing
@@ -296,6 +335,9 @@ MCP registration: `claude mcp add login -- login`.
 8. Repo has a `master` branch (created); it is the PR base.
 9. The form has a Reject button with an optional reason (encrypted like a submission) -> `user_rejected` error.
 10. Every driver detects a second-factor requirement and launches another round (`totp`).
+
+11. Audit log and request limits are on by default; they protect people and give an accountability trail
+    (section 5.2). The agent-facing contract is described by resources and instructions (section 5.1).
 
 Still open: publishing the static page needs GitHub Pages enabled for the repo (source: GitHub
 Actions, deploying `web/` on each release tag). That is a repo setting for the owner.

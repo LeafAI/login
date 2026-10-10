@@ -67,3 +67,19 @@ func TestDoctorSiteInspectsAJenkins(t *testing.T) {
 		t.Errorf("allowed_hosts not enforced:\n%s", out)
 	}
 }
+
+func TestDoctorReportsAuditAndLimits(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "c.yaml")
+	os.WriteFile(cfgPath, []byte("limits: {per_site: 3}\n"), 0o600)
+	out, _ := capture(t, func() int { return runDoctor([]string{"-config", cfgPath}) })
+	if !strings.Contains(out, "[ok  ] audit log: "+filepath.Join(dir, "audit.jsonl")) {
+		t.Errorf("doctor should check the audit log:\n%s", out)
+	}
+	if !strings.Contains(out, "at most 3 times per site") || !strings.Contains(out, "login config init") {
+		t.Errorf("doctor should show the limits and point at `login config init`:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "audit.jsonl")); err != nil {
+		t.Errorf("the audit file should be creatable: %v", err)
+	}
+}

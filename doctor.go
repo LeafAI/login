@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeafAI/login/internal/audit"
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/mcpserver"
 	"github.com/LeafAI/login/internal/notify"
@@ -56,7 +57,7 @@ func runDoctor(args []string) int {
 		report(true, "config", *cfgPath)
 	}
 
-	report(cfg.DingTalk.Webhook != "", "dingtalk webhook", map[bool]string{true: "configured", false: "missing (dingtalk.webhook or LOGIN_DINGTALK_WEBHOOK)"}[cfg.DingTalk.Webhook != ""])
+	report(cfg.DingTalk.Webhook != "", "dingtalk webhook", map[bool]string{true: "configured", false: "missing: run `login config init` (or set dingtalk.webhook / LOGIN_DINGTALK_WEBHOOK)"}[cfg.DingTalk.Webhook != ""])
 	if _, err := url.Parse(cfg.Web.PageURL); err != nil {
 		report(false, "web.page_url", err.Error())
 	} else {
@@ -83,6 +84,7 @@ func runDoctor(args []string) int {
 		}
 		report(true, "tunnel providers", strings.Join(names, ", "))
 	}
+	doctorGuards(cfg, report)
 	if !cfg.Archery.DDLAllowed() {
 		fmt.Println("[note] archery.allow_ddl is false: DDL will be refused")
 	}
@@ -171,4 +173,20 @@ func doctorSite(ctx context.Context, cfg *config.Config, rawURL, name string, re
 	for _, f := range findings {
 		fmt.Println("[info] " + f)
 	}
+}
+
+// doctorGuards reports the activity log and the limits that protect people from request floods.
+func doctorGuards(cfg *config.Config, report func(bool, string, string)) {
+	if cfg.Audit.On() {
+		if l, err := audit.Open(cfg.Audit.File, nil); err != nil {
+			report(false, "audit log", err.Error())
+		} else if l != nil {
+			report(true, "audit log", cfg.Audit.File)
+		}
+	} else {
+		fmt.Println("[note] audit.enabled is false: nothing records who asked for which login")
+	}
+	l := cfg.Limits
+	fmt.Printf("[note] people are asked at most %d times per site and %d overall per %s; a rejected site is paused for %s\n",
+		l.PerSite, l.Total, l.Window, l.RejectCooldown)
 }

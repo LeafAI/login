@@ -1,12 +1,12 @@
 # login — MCP tool schemas
 
-Status: **design draft** (companion to `DESIGN.md`). Schemas are JSON Schema (draft 2020-12);
+Status: **implemented** (companion to `DESIGN.md`). Schemas are JSON Schema (draft 2020-12);
 in Go they are generated from tagged structs by the MCP SDK, so these definitions are the source
 for `internal/mcpserver/types.go`.
 
 ## 0. Conventions
 
-**Tools (11)**
+**Tools (12)**
 
 | Tool | Purpose | Blocks? |
 |---|---|---|
@@ -16,6 +16,7 @@ for `internal/mcpserver/types.go`.
 | `login_sessions` | list cached sessions (no secrets) | no |
 | `logout` | drop cached session(s) | no |
 | `archery_instances` | list instances/databases the user can use | no |
+| `archery_groups` | list resource groups (and a group's writable instances) | no |
 | `archery_query` | read-only SQL query (no approval) | no |
 | `archery_run_sql` | submit -> approval -> execute -> result, as one sync call | up to `max_block_seconds` |
 | `archery_wait` | resume a pending workflow (idempotent) | up to `max_block_seconds` |
@@ -44,12 +45,29 @@ matching the output schema plus a short text summary. Failures are `isError: tru
 Codes: `invalid_argument`, `unsupported_site`, `human_timeout` (nobody completed a round before the TTL),
 `host_not_allowed` (the URL's host is outside `security.allowed_hosts`),
 `user_rejected` (the human pressed Reject on the page; `message` carries their optional reason, not retryable),
+`rate_limited` (too many requests to people, or the site was just rejected; `retryable`, carries a hint not to loop),
 `bad_credentials`, `login_rejected` (site refused, e.g. account locked / captcha), `tunnel_unavailable`,
 `notify_failed` (DingTalk), `site_unreachable`, `ddl_disabled`, `sql_check_failed`, `archery_error`,
 `workflow_not_found`, `session_expired` (a cached session was rejected by the site; call `login` with `force_refresh`), `internal`.
 
+**Output schemas and titles.** Every tool advertises a human-readable `title` and an `outputSchema` (generated
+from the Go result types, so they cannot drift). The schemas list the fields of both the success and the
+pending answer; no field is `required`, because one result type serves both. A tool that fails returns
+`isError: true` with the `Error` object above, which is not part of `outputSchema`.
+
+**Resources** (read-only, JSON, never contain secrets):
+
+| URI | Content |
+|---|---|
+| `login://sites` | same as `login_sites` |
+| `login://sessions` | same as `login_sessions` |
+| `login://policy` | `allowed_hosts`, `max_block_seconds`, `limits` (per site / total / window / reject cool-down), `archery_ddl_allowed`, `audit_enabled`, `human_step_ttl_seconds` |
+
+**Server instructions.** At connect time the server tells the model how to use the tools: call `login`, on
+`pending` call `login_wait` (never `login` again), what to do for each error code, treat cookies as secrets.
+
 **Annotations** (MCP tool hints): `login*`: `openWorldHint: true`; `login_sites`/`login_sessions`/
-`archery_instances`/`archery_query`/`archery_workflow_status`: `readOnlyHint: true`;
+`archery_instances`/`archery_groups`/`archery_query`/`archery_workflow_status`: `readOnlyHint: true`;
 `archery_run_sql`: `destructiveHint: true`; `archery_wait`/`login_wait`: `idempotentHint: true`.
 
 **Shared definitions**
@@ -139,6 +157,20 @@ Output
 { "instances":[ { "name":"prod-mysql-01","type":"master","db_type":"mysql" } ],
   "databases":["orders","users"],                 // only when `instance` was given
   "login": { ...pending login... } }              // only when a human login is still pending
+```
+
+## 6a. `archery_groups`
+
+Lists the resource groups the user may submit SQL to, so an agent can fill `resource_group` of
+`archery_run_sql` without ever handling a session credential. Names only; Archery's internal ids are not exposed.
+
+Input: `{ "url": uri (required), "site": string?, "group": string? }` (with `group`, that group's instances that
+accept changes are listed too; an unknown group answers `archery_error` listing the available names).
+Output
+```jsonc
+{ "groups":["dba","dev"],
+  "writable_instances":[ { "id":7,"name":"prod","db_type":"mysql" } ],   // only when `group` was given
+  "login": { ...pending login... } }                                       // only when a human login is still pending
 ```
 
 ## 7. `archery_query`
