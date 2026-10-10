@@ -26,6 +26,7 @@ import (
 
 	_ "github.com/LeafAI/login/internal/site/archery"
 	_ "github.com/LeafAI/login/internal/site/gitlab"
+	_ "github.com/LeafAI/login/internal/site/jenkins"
 	_ "github.com/LeafAI/login/internal/site/kibana"
 	_ "github.com/LeafAI/login/internal/site/kubesphere"
 	_ "github.com/LeafAI/login/internal/site/nightingale"

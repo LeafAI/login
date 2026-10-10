@@ -1,7 +1,7 @@
 # login
 
 An MCP server that lets an AI agent obtain a valid cookie/token for sites that need a human to type
-credentials (GitLab, Kibana, KubeSphere, Nightingale v7, Archery, SkyWalking, and any site you describe in YAML).
+credentials (GitLab, Jenkins, Kibana, KubeSphere, Nightingale v7, Archery, SkyWalking, and any site you describe in YAML).
 The agent never sees the password.
 
 ```
@@ -127,7 +127,11 @@ of both generations, then exercised against fake servers that reproduce those co
 error pages).
 
 **Not verified against live systems:** the real SSH provider services (use `login doctor -tunnel`), a real DingTalk robot, and the live
-GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. **GitLab** was checked against the GitLab source (16.8 and master): classic server-rendered forms, the LDAP tab
+GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. **Jenkins** (2.226) was checked against its source: the login form action is read from the page
+(`j_acegi_security_check` in 2.226, `j_spring_security_check` in newer releases), success is decided by
+`/whoAmI/api/json` (an anonymous visitor also reports `authenticated: true`, so the `anonymous` flag is used), and
+the session-bound CSRF crumb is returned as the `Jenkins-Crumb` header for POST requests. Core Jenkins has no
+2FA; a 2FA plugin's extra step is reported as an error, not guessed. **GitLab** was checked against the GitLab source (16.8 and master): classic server-rendered forms, the LDAP tab
 (`/users/auth/<provider>/callback`) and current GitLab's Vue sign-in and 2FA steps. **KubeSphere** 3.4.1 was checked
 against its source: LDAP users must use `/oauth/login/<provider>` (the local `/oauth/token` grant cannot
 authenticate them), and the provider is discovered from the published OAuth config. **Kibana**'s login route and provider discovery were checked against

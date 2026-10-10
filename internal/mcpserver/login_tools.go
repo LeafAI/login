@@ -192,6 +192,7 @@ func classify(err error) *ToolError {
 
 var builtinInfo = map[string]SiteInfo{
 	"gitlab":      {Auth: "cookie", NeedsLogin: true, Rounds: []string{"login", "totp?"}, Match: "hostname contains 'gitlab'"},
+	"jenkins":     {Auth: "cookie", NeedsLogin: true, Rounds: []string{"login"}, Match: "hostname contains 'jenkins'"},
 	"kibana":      {Auth: "cookie", NeedsLogin: true, Rounds: []string{"login"}, Match: "hostname contains 'kibana'"},
 	"kubesphere":  {Auth: "bearer", NeedsLogin: true, Rounds: []string{"login"}, Match: "hostname contains 'kubesphere'"},
 	"nightingale": {Auth: "bearer", NeedsLogin: true, Rounds: []string{"login", "(captcha is part of the login step when enabled)"}, Match: "hostname contains 'nightingale' or 'n9e'"},
