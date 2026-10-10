@@ -112,6 +112,22 @@ tunnel:
 ```
 (`url` for fixed-address servers, `url_regex` for ones that print a random URL.)
 
+#### Tunnel lifecycle: one-shot
+
+A tunnel serves exactly one login and nothing of it may outlive that login.
+
+- **Checked before use.** A new tunnel is asked, from outside, for a path that does not exist; our API answers 404.
+  Anything else (the provider's own 502 "no tunnel", a timeout) means the public name is not routed to us, so the
+  tunnel is closed and replaced (up to 4 per attempt). No link is ever sent for a tunnel that did not answer; when
+  none does the login fails with `tunnel_unavailable`. The audit log records the provider that carried the link and
+  how many tunnels it took (`tunnel` event, `attempts`).
+- **Closed at the end, however it ends.** Success, a refusal by the site, wrong password, Reject, timeout, cancel
+  (`logout`), notification failure and server shutdown all close it. When a page is waiting it stays only until the
+  page has read the final state, plus a short flush delay (`FlushDelay`, 3 s) so that the answer is delivered; if the
+  page never reads it, `OutcomeCap` (10 s) closes it.
+- **The whole process tree.** The tunnel runs in its own process group and closing it kills the group, so a wrapper
+  script of a custom provider cannot leave the real `ssh` behind holding the public name and the forwarded port.
+
 ### 4.3 Static page + one-shot API (`web`, `api`)
 The tunnel carries **only JSON**. All JavaScript comes from a static page that does not travel
 through the tunnel, so a malicious provider has no script to tamper with.

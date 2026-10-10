@@ -16,16 +16,18 @@ import (
 // Event is one line of the audit log.
 type Event struct {
 	Time     string `json:"time"`
-	Event    string `json:"event"`            // tool_call | human_request | human_round | rate_limited
-	Tool     string `json:"tool,omitempty"`   // MCP tool name
-	Client   string `json:"client,omitempty"` // MCP client name/version as reported at initialize
-	Site     string `json:"site,omitempty"`   // driver name
-	Host     string `json:"host,omitempty"`   // site host:port
-	Reason   string `json:"reason,omitempty"` // the reason the agent gave (already length-limited)
-	Result   string `json:"result,omitempty"` // ok | pending | error code
-	Cached   bool   `json:"cached,omitempty"` // the session came from the cache, nobody was asked
-	Mode     string `json:"mode,omitempty"`   // human_round: login | totp | custom
-	Round    int    `json:"round,omitempty"`  // human_round: 1, 2, ...
+	Event    string `json:"event"`              // tool_call | human_request | human_round | tunnel | rate_limited
+	Tool     string `json:"tool,omitempty"`     // MCP tool name
+	Client   string `json:"client,omitempty"`   // MCP client name/version as reported at initialize
+	Site     string `json:"site,omitempty"`     // driver name
+	Host     string `json:"host,omitempty"`     // site host:port
+	Reason   string `json:"reason,omitempty"`   // the reason the agent gave (already length-limited)
+	Result   string `json:"result,omitempty"`   // ok | pending | error code
+	Cached   bool   `json:"cached,omitempty"`   // the session came from the cache, nobody was asked
+	Mode     string `json:"mode,omitempty"`     // human_round: login | totp | custom
+	Round    int    `json:"round,omitempty"`    // human_round: 1, 2, ...
+	Tunnel   string `json:"tunnel,omitempty"`   // tunnel: the provider that carries the link (pinggy, localhost.run, ...)
+	Attempts int    `json:"attempts,omitempty"` // tunnel: tunnels opened until one carried traffic (more than 1 = dead ones were replaced)
 	Millis   int64  `json:"ms,omitempty"`
 	SQLBytes int    `json:"sql_bytes,omitempty"` // size of submitted SQL, never its text
 	SQLHash  string `json:"sql_sha256,omitempty"`

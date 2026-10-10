@@ -148,3 +148,44 @@ func TestStatusAndCORS(t *testing.T) {
 		}
 	}
 }
+
+// The tunnel is only needed until the page has read the final state, so reading it by polling must tell the owner,
+// exactly once, and an in-progress state must not.
+func TestFinalStateReadNotifiesOnceAndOnlyWhenFinal(t *testing.T) {
+	e := setup(t)
+	r := e.srv.NewRound("login", 1)
+	calls := 0
+	r.OnFinalRead(func() { calls++ })
+	get := func() {
+		resp, err := http.Get(e.base + "/" + r.Token + "/status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	get() // waiting
+	r.SetStatus(StateWorking, "")
+	get()
+	r.SetStatus(StateNextRound, "")
+	get()
+	if calls != 0 {
+		t.Fatalf("callback ran %d times for states that are not final", calls)
+	}
+	r.SetStatus(StateDone, "")
+	get()
+	get()
+	if calls != 1 {
+		t.Fatalf("callback ran %d times for a final state read twice, want exactly 1", calls)
+	}
+	for _, st := range []string{StateFailed, StateRejected} {
+		r2 := e.srv.NewRound("login", 1)
+		n := 0
+		r2.OnFinalRead(func() { n++ })
+		r2.SetStatus(st, "x")
+		resp, _ := http.Get(e.base + "/" + r2.Token + "/status")
+		resp.Body.Close()
+		if n != 1 {
+			t.Errorf("%s is a final state: callback ran %d times", st, n)
+		}
+	}
+}

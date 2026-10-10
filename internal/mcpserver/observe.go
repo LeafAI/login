@@ -28,6 +28,11 @@ func (s *Server) onRound(f *flow.Flow, mode string, round int) {
 	s.audit.Record(audit.Event{Event: "human_round", Site: f.Site, Host: f.Base.Host, Mode: mode, Round: round})
 }
 
+// onTunnel audits which provider carries a flow's link, and how many tunnels were opened to find one that works.
+func (s *Server) onTunnel(f *flow.Flow, provider string, attempts int) {
+	s.audit.Record(audit.Event{Event: "tunnel", Site: f.Site, Host: f.Base.Host, Tunnel: provider, Attempts: attempts})
+}
+
 // The inputs say which site they target and which SQL they carry, so the audit trail can name them.
 type targeter interface{ target() string }
 type sqler interface{ sqlText() string }

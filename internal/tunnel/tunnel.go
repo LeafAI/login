@@ -82,15 +82,19 @@ type Tunnel struct {
 // Done is closed when the ssh process exits.
 func (t *Tunnel) Done() <-chan struct{} { return t.done }
 
-// Close terminates the ssh process.
+// Close ends the tunnel for good: the process and everything it started. A tunnel is one-shot, so nothing of it may
+// outlive the login: not the process (it would keep the public name and the forwarded port), and not a child of it
+// (a custom provider is often a wrapper script that starts the real ssh). The process runs in its own process group
+// (see start), so one signal reaches the whole tree. Close is safe to call again and from several places.
 func (t *Tunnel) Close() {
 	t.once.Do(func() {
 		t.stdin.Close()
-		if t.cmd.Process != nil {
-			t.cmd.Process.Kill()
-		}
+		killTree(t.cmd)
 	})
-	<-t.done
+	select {
+	case <-t.done:
+	case <-time.After(5 * time.Second): // never hang the caller on a process that will not die
+	}
 }
 
 type Runner struct {
@@ -153,6 +157,7 @@ func (r *Runner) start(ctx context.Context, p *Provider, port int) (*Tunnel, err
 	pr, pw := io.Pipe() // stdout and stderr merged
 	cmd.Stdout, cmd.Stderr = pw, pw
 	cmd.WaitDelay = time.Second // do not hang on grandchildren holding the pipe
+	inOwnProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
