@@ -116,6 +116,18 @@ type InstancesOutput struct {
 	Pending   *LoginOutput       `json:"login,omitempty"`
 }
 
+type GroupsInput struct {
+	ArcheryURL
+	Group string `json:"group,omitempty" jsonschema:"When given, also list the instances of this resource group that accept changes."`
+}
+
+// GroupsOutput lists resource-group names only: ids are Archery internals the agent never needs.
+type GroupsOutput struct {
+	Groups    []string           `json:"groups,omitempty"`
+	Instances []archery.Instance `json:"writable_instances,omitempty"`
+	Pending   *LoginOutput       `json:"login,omitempty"`
+}
+
 type QueryInput struct {
 	ArcheryURL
 	Instance string `json:"instance"`

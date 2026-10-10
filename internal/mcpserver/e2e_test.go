@@ -250,7 +250,7 @@ func TestToolsListAndNoAuthSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "login login_wait login_sites login_sessions logout archery_instances archery_query archery_run_sql archery_wait archery_workflow_status archery_cancel"
+	want := "login login_wait login_sites login_sessions logout archery_instances archery_groups archery_query archery_run_sql archery_wait archery_workflow_status archery_cancel"
 	var got []string
 	for _, tl := range tools.Tools {
 		got = append(got, tl.Name)

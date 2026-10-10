@@ -1,6 +1,7 @@
 package mcpserver_test
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -43,6 +44,21 @@ func testArcheryToolsEndToEnd(t *testing.T, legacy bool) {
 	})
 	loginArchery(t, e, arch)
 	args := func(m map[string]any) map[string]any { m["url"] = arch.URL; return m }
+
+	// discover the resource group without ever seeing a credential
+	g, isErr := e.call(t, "archery_groups", args(map[string]any{"group": "dba"}))
+	if isErr || fmt.Sprint(g["groups"]) != "[dba dev]" {
+		t.Fatalf("groups: %v", g)
+	}
+	if wi, _ := g["writable_instances"].([]any); len(wi) != 1 || wi[0].(map[string]any)["name"] != "prod" {
+		t.Errorf("writable instances: %v", g)
+	}
+	if strings.Contains(fmt.Sprint(g), "group-id") || strings.Contains(fmt.Sprint(g), "sessionid") {
+		t.Errorf("groups must expose names only: %v", g)
+	}
+	if bad, isErr := e.call(t, "archery_groups", args(map[string]any{"group": "nope"})); !isErr || bad["code"] != "archery_error" || !strings.Contains(bad["message"].(string), "available: dba, dev") {
+		t.Errorf("unknown group should list the available ones: %v", bad)
+	}
 
 	// read-only query, and refusal of a write through the query tool
 	q, isErr := e.call(t, "archery_query", args(map[string]any{"instance": "prod", "database": "d", "sql": "select * from t"}))

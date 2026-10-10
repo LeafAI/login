@@ -81,6 +81,35 @@ func (s *Server) archeryInstances(ctx context.Context, req *mcp.CallToolRequest,
 	return out, nil
 }
 
+func (s *Server) archeryGroups(ctx context.Context, req *mcp.CallToolRequest, in GroupsInput) (any, *ToolError) {
+	c, pending, terr := s.archeryClient(ctx, req, in.ArcheryURL, s.maxBlock(0))
+	if terr != nil {
+		return nil, terr
+	}
+	if pending != nil {
+		return GroupsOutput{Pending: pending}, nil
+	}
+	groups, err := c.Groups(ctx)
+	if err != nil {
+		return nil, archeryErr(err)
+	}
+	out := GroupsOutput{Groups: make([]string, 0, len(groups))}
+	for _, g := range groups {
+		out.Groups = append(out.Groups, g.Name)
+	}
+	if in.Group == "" {
+		return out, nil
+	}
+	g, err := archery.FindGroup(groups, in.Group)
+	if err != nil {
+		return nil, archeryErr(err)
+	}
+	if out.Instances, err = c.GroupInstances(ctx, g.Name); err != nil {
+		return nil, archeryErr(err)
+	}
+	return out, nil
+}
+
 func (s *Server) archeryQuery(ctx context.Context, req *mcp.CallToolRequest, in QueryInput) (any, *ToolError) {
 	if !archery.IsReadOnly(in.SQL) {
 		return nil, errf("invalid_argument", false, "archery_query accepts a single read-only statement; use archery_run_sql for changes")

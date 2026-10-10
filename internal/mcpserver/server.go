@@ -157,6 +157,9 @@ func (s *Server) register(m *mcp.Server) error {
 			return addTool(m, s.observe, spec[InstancesOutput]{"archery_instances", "List Archery instances", "List Archery instances (and optionally an instance's databases) the user can access.", ro}, s.archeryInstances)
 		},
 		func() error {
+			return addTool(m, s.observe, spec[GroupsOutput]{"archery_groups", "List Archery resource groups", "List the Archery resource groups the user can submit SQL to (use a name as resource_group in archery_run_sql). With group, also list that group's instances that accept changes.", ro}, s.archeryGroups)
+		},
+		func() error {
 			return addTool(m, s.observe, spec[QueryOutput]{"archery_query", "Run a read-only SQL query", "Run a read-only SQL query through Archery's query endpoint (no approval needed).", ro}, s.archeryQuery)
 		},
 		func() error {

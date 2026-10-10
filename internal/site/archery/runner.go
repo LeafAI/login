@@ -85,6 +85,9 @@ func (t *Tracker) get(base *url.URL, id int) *track {
 	return tr
 }
 
+// FindGroup picks a resource group by name (case-insensitive); the error lists the available names.
+func FindGroup(gs []Group, name string) (Group, error) { return findGroup(gs, name) }
+
 func findGroup(gs []Group, name string) (Group, error) {
 	var names []string
 	for _, g := range gs {

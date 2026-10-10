@@ -45,8 +45,8 @@ func TestEveryToolHasTitleAndOutputSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Tools) != 11 {
-		t.Fatalf("%d tools, want 11", len(res.Tools))
+	if len(res.Tools) != 12 {
+		t.Fatalf("%d tools, want 12", len(res.Tools))
 	}
 	for _, tl := range res.Tools {
 		if tl.Title == "" || tl.Title == tl.Name {
