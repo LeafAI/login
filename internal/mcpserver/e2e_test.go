@@ -119,6 +119,19 @@ func human(t *testing.T, msg, dir, action, values, reason string) string {
 	return string(out)
 }
 
+// requireBrowser skips the test unless Node, Playwright and a Chromium are usable.
+func requireBrowser(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available")
+	}
+	cmd := exec.Command("node", "-e", "require('playwright').chromium.executablePath()")
+	cmd.Env = append(os.Environ(), "NODE_PATH=/opt/node22/lib/node_modules")
+	if err := cmd.Run(); err != nil {
+		t.Skip("playwright not available")
+	}
+}
+
 type env struct {
 	cs   *mcp.ClientSession
 	rec  *recorder
@@ -130,9 +143,7 @@ func setup(t *testing.T) *env { return setupWith(t, nil) }
 
 func setupWith(t *testing.T, tweak func(*config.Config)) *env {
 	t.Helper()
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not available")
-	}
+	requireBrowser(t)
 	dir := t.TempDir()
 	if err := web.WriteTo(dir); err != nil {
 		t.Fatal(err)
