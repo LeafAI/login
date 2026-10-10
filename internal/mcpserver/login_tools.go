@@ -35,7 +35,20 @@ func (s *Server) login(ctx context.Context, req *mcp.CallToolRequest, in LoginIn
 	if terr != nil {
 		return nil, terr
 	}
-	return out, nil
+	return redactForAgent(out), nil
+}
+
+// redactForAgent removes the credentials from a login result when the site is one that has dedicated tools.
+// Archery's tools (archery_*) use the cached session on the agent's behalf, so the agent has no need to hold
+// its cookies, and must not. Every other site is used by the agent directly and keeps its credentials.
+func redactForAgent(out *LoginOutput) *LoginOutput {
+	if out == nil || out.Status != "ok" || out.Site != "archery" {
+		return out
+	}
+	cp := *out
+	cp.CookieHeader, cp.Cookies, cp.Headers, cp.Tokens = "", nil, nil, nil
+	cp.Redacted = true
+	return &cp
 }
 
 func (s *Server) loginWait(ctx context.Context, req *mcp.CallToolRequest, in LoginWaitInput) (any, *ToolError) {
@@ -47,7 +60,7 @@ func (s *Server) loginWait(ctx context.Context, req *mcp.CallToolRequest, in Log
 	if terr != nil {
 		return nil, terr
 	}
-	return out, nil
+	return redactForAgent(out), nil
 }
 
 // ensureLogin returns a valid session for the site: from cache, or by running a login flow.

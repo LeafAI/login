@@ -139,7 +139,7 @@ func (s *Server) register(m *mcp.Server) error {
 	for _, reg := range []func() error{
 		func() error {
 			return addTool(m, s.observe, spec[LoginOutput]{"login", "Log in to a website",
-				"Log in to a website (gitlab, jenkins, kibana, kubesphere, nightingale, archery, skywalking, or a configured site) and return a valid cookie/token. A human types the credential on a page opened from a DingTalk link; the agent never sees the password. If still pending after max_block_seconds, call login_wait with the returned login_id.", open(false)}, s.login)
+				"Log in to a website (gitlab, jenkins, kibana, kubesphere, nightingale, archery, skywalking, or a configured site) and return a valid cookie/token. A human types the credential on a page opened from a DingTalk link; the agent never sees the password. For archery the result carries no credentials (use the archery_* tools). If still pending after max_block_seconds, call login_wait with the returned login_id.", open(false)}, s.login)
 		},
 		func() error {
 			return addTool(m, s.observe, spec[LoginOutput]{"login_wait", "Resume a pending login", "Resume a pending login started by `login`.", open(true)}, s.loginWait)

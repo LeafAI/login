@@ -114,6 +114,11 @@ Output (`oneOf` by `status`)
   "round":1, "expires_at":"2026-10-10T08:10:00Z", // when the human link stops working
   "next_tool":"login_wait" }
 ```
+**Archery is the exception: its credentials are withheld.** For `archery` the result has `"redacted": true` and
+no `cookie_header`, `cookies`, `headers` or `tokens` (site, base URL and `auth` are still given). The `archery_*`
+tools use the cached session on the agent's behalf, so the agent has no need to hold it. Every other site is
+used by the agent directly and keeps its credentials in the result.
+
 Notes: `cached` hits are validated with the driver's `Probe` first. Concurrent calls for the same site
 share one flow (same `login_id`).
 

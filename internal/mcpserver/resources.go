@@ -84,7 +84,7 @@ How to use it:
 1. Call login with the site's URL and a short, honest reason (the person sees it). A cached session is returned without bothering anyone (cached: true).
 2. If the result is status "pending", a person has been asked. Call login_wait with the login_id; do not call login again. Waiting never re-sends the message.
 3. Errors have a code. user_rejected: the person said no, stop and tell the user. rate_limited: people are being asked too often, wait for retry, do not loop. host_not_allowed: the host is outside policy, do not try other spellings. session_expired: call login with force_refresh.
-4. Cookies and tokens are secrets: use them only for requests to that site and never print or store them.
+4. Cookies and tokens are secrets: use them only for requests to that site and never print or store them. Archery is the exception: login returns no credentials for it (redacted: true) and the archery_* tools use the session for you.
 5. For SQL on Archery: archery_instances / archery_groups discover what exists (archery_run_sql needs a resource_group name from archery_groups), archery_query is read-only with no approval, archery_run_sql needs a human approval (call archery_wait if it returns pending).
 
 Resources: login://sites (what is supported), login://sessions (what is already logged in), login://policy (limits that apply to you).`

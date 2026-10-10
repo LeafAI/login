@@ -37,6 +37,7 @@ carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_T
   0600). This keeps secrets out of backups and greps, but does not protect against other processes of the same
   user. Every reuse is validated against the site first; stale entries are dropped.
 - Returned cookies/tokens are secrets handed to the agent by design; `login_sessions` never shows them.
+  The exception is Archery: its `login` result is redacted because the `archery_*` tools use the session for the agent.
 
 ## Set it up without editing YAML
 
