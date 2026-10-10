@@ -114,6 +114,20 @@ type Flow struct {
 	tn     Tunnel
 	cur    *api.Round
 	rounds int
+
+	closeOnce sync.Once
+}
+
+// shutdown stops the tunnel and API server (idempotent).
+func (f *Flow) shutdown() {
+	f.closeOnce.Do(func() {
+		if f.tn != nil {
+			f.tn.Close()
+		}
+		if f.srv != nil {
+			f.srv.Close()
+		}
+	})
 }
 
 // Start launches (or joins) the login flow for a site. onDone runs once with the result.
@@ -156,6 +170,26 @@ func (m *Manager) Get(id string) *Flow {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.flows[id]
+}
+
+// Close cancels every running flow and tears down all tunnels immediately.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	flows := make([]*Flow, 0, len(m.flows))
+	for _, f := range m.flows {
+		flows = append(flows, f)
+	}
+	m.mu.Unlock()
+	for _, f := range flows {
+		f.cancel()
+	}
+	for _, f := range flows {
+		select {
+		case <-f.done:
+		case <-time.After(2 * time.Second):
+		}
+		f.shutdown()
+	}
 }
 
 // CancelBase cancels a running flow for the given site base URL.
@@ -296,11 +330,7 @@ func (f *Flow) finish(sess *site.Session, err error) {
 	}
 	close(f.done)
 	if f.srv != nil {
-		go func() {
-			time.Sleep(f.m.cfg.Grace)
-			f.tn.Close()
-			f.srv.Close()
-		}()
+		time.AfterFunc(f.m.cfg.Grace, f.shutdown)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -58,13 +59,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	srv, _, err := mcpserver.New(cfg, mcpserver.Options{})
+	srv, app, err := mcpserver.New(cfg, mcpserver.Options{})
 	if err != nil {
 		log.Fatalf("setup: %v", err)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
+	err = srv.Run(ctx, &mcp.StdioTransport{})
+	app.Close() // tear down tunnels of pending logins
+	if err != nil && ctx.Err() == nil {
 		log.Fatalf("server: %v", err)
 	}
 }

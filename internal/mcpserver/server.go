@@ -83,6 +83,9 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	return m, s, nil
 }
 
+// Close stops pending logins and their tunnels.
+func (s *Server) Close() { s.mgr.Close() }
+
 func (s *Server) register(m *mcp.Server) {
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true}
 	open := func(h bool) *mcp.ToolAnnotations {

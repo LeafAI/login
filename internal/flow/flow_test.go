@@ -117,3 +117,37 @@ func TestMessageEscapesAgentText(t *testing.T) {
 		t.Errorf("real link missing:\n%s", msg)
 	}
 }
+
+type closeCountTunnel struct{ closed *int }
+
+func (closeCountTunnel) PublicURL() string     { return "http://127.0.0.1:1" }
+func (closeCountTunnel) Done() <-chan struct{} { return nil }
+func (c closeCountTunnel) Close()              { *c.closed++ }
+
+type countingTunnels struct{ closed *int }
+
+func (c countingTunnels) Start(context.Context, int) (Tunnel, error) {
+	return closeCountTunnel{c.closed}, nil
+}
+
+func TestManagerCloseTearsDownPendingTunnel(t *testing.T) {
+	closed := 0
+	m := manager(t, okNotifier{}, countingTunnels{&closed}, time.Minute)
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	for i := 0; f.Snapshot().Phase != "waiting_human"; i++ { // wait until the tunnel is up and the human is being waited for
+		if i > 200 {
+			t.Fatal("flow never reached waiting_human")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	m.Close()
+	if closed != 1 {
+		t.Errorf("tunnel closed %d times, want 1", closed)
+	}
+	select {
+	case <-f.Done():
+	default:
+		t.Error("flow still running after Close")
+	}
+}
