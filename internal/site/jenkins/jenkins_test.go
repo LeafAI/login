@@ -146,3 +146,21 @@ func TestProbeDistinguishesAnonymousSessions(t *testing.T) {
 		t.Error("anonymous session accepted")
 	}
 }
+
+func TestInspect(t *testing.T) {
+	for _, action := range []string{"j_acegi_security_check", "j_spring_security_check"} {
+		srv := httptest.NewServer(fake{action: action}.handler())
+		u, _ := url.Parse(srv.URL)
+		out, err := driver{}.Inspect(context.Background(), u, srv.Client())
+		srv.Close()
+		if err != nil || !strings.Contains(strings.Join(out, " "), "posts to "+action) {
+			t.Errorf("%s: %v %v", action, out, err)
+		}
+	}
+	other := httptest.NewServer(http.NotFoundHandler())
+	defer other.Close()
+	u, _ := url.Parse(other.URL)
+	if _, err := (driver{}).Inspect(context.Background(), u, other.Client()); err == nil {
+		t.Error("a non-Jenkins server was accepted")
+	}
+}

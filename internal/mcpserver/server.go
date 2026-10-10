@@ -53,16 +53,8 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 		}
 		site.Replace(d)
 	}
-	for name, opts := range cfg.SiteOptions {
-		d, err := site.Resolve(name, nil)
-		if err != nil {
-			return nil, nil, fmt.Errorf("site_options: %w", err)
-		}
-		c, ok := d.(site.Configurable)
-		if !ok {
-			return nil, nil, fmt.Errorf("site_options: driver %q has no options", name)
-		}
-		c.Configure(opts)
+	if err := ApplySiteOptions(cfg); err != nil {
+		return nil, nil, err
 	}
 	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log}
 	if s.hc == nil {
@@ -98,6 +90,22 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	m := mcp.NewServer(&mcp.Implementation{Name: "login", Version: "0.1.0"}, nil)
 	s.register(m)
 	return m, s, nil
+}
+
+// ApplySiteOptions hands the `site_options:` section to the drivers that accept options.
+func ApplySiteOptions(cfg *config.Config) error {
+	for name, opts := range cfg.SiteOptions {
+		d, err := site.Resolve(name, nil)
+		if err != nil {
+			return fmt.Errorf("site_options: %w", err)
+		}
+		c, ok := d.(site.Configurable)
+		if !ok {
+			return fmt.Errorf("site_options: driver %q has no options", name)
+		}
+		c.Configure(opts)
+	}
+	return nil
 }
 
 // Close stops pending logins and their tunnels.

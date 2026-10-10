@@ -150,3 +150,28 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 	}
 	return nil
 }
+
+// Inspect reports the Archery generation (REST API or 1.x) and that the login page is reachable.
+func (driver) Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error) {
+	c := site.JarClient(hc)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/login/", nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", site.ErrUnreachable, err)
+	}
+	site.ReadBody(resp)
+	if csrfOf(c, base) == "" {
+		return nil, fmt.Errorf("no csrftoken from %s/login/: not Archery, or a path prefix is missing (use roots:)", base)
+	}
+	// Unauthenticated, the REST route answers 403 JSON when it exists and 404 on Archery 1.x.
+	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/api/v1/sqlquery/instances/", nil)
+	probe, err := site.NoRedirect(c).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", site.ErrUnreachable, err)
+	}
+	probe.Body.Close()
+	if probe.StatusCode == http.StatusNotFound {
+		return []string{"login page found", "Archery 1.x generation (verified against v1.12.0): ajax endpoints /query/, /execute/, /cancel/ are used"}, nil
+	}
+	return []string{"login page found", fmt.Sprintf("newer REST generation (/api/v1/sqlquery answered %d without a session): /api/v1/sql-workflows is used", probe.StatusCode)}, nil
+}

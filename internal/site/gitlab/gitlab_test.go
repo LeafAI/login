@@ -266,3 +266,35 @@ func TestLoginMethodOptions(t *testing.T) {
 		t.Errorf("explicit provider: %v", err)
 	}
 }
+
+func inspect(t *testing.T, o opts, options map[string]string) string {
+	t.Helper()
+	srv := fakeGitLab(o)
+	defer srv.Close()
+	d := &driver{}
+	d.Configure(options)
+	u, _ := url.Parse(srv.URL)
+	out, err := d.Inspect(context.Background(), u, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(out, "\n")
+}
+
+func TestInspectDescribesTheServer(t *testing.T) {
+	if got := inspect(t, opts{ldap: true}, nil); !strings.Contains(got, `LDAP sign-in tab found (provider "ldapmain")`) || !strings.Contains(got, "classic") {
+		t.Errorf("ldap/classic:\n%s", got)
+	}
+	if got := inspect(t, opts{flavor: modern}, nil); !strings.Contains(got, "no LDAP tab") || !strings.Contains(got, "JavaScript") {
+		t.Errorf("modern:\n%s", got)
+	}
+	if got := inspect(t, opts{ldap: true}, map[string]string{"login_method": "standard"}); !strings.Contains(got, "forces: standard") {
+		t.Errorf("override not reported:\n%s", got)
+	}
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	if _, err := (&driver{}).Inspect(context.Background(), u, srv.Client()); err == nil {
+		t.Error("a non-GitLab server was accepted")
+	}
+}

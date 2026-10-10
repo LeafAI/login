@@ -16,6 +16,7 @@ import (
 	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/mcpserver"
 	"github.com/LeafAI/login/internal/notify"
+	"github.com/LeafAI/login/internal/site"
 	"github.com/LeafAI/login/internal/tunnel"
 )
 
@@ -26,6 +27,8 @@ func runDoctor(args []string) int {
 	cfgPath := fs.String("config", config.DefaultPath(), "config file")
 	doTunnel := fs.Bool("tunnel", false, "start each configured tunnel provider and fetch a page through it")
 	doSend := fs.Bool("send", false, "send a test message through the DingTalk robot")
+	siteURL := fs.String("site", "", "inspect a site (no credentials): picks the driver like the tools do and reports what it will do")
+	siteName := fs.String("site-name", "", "driver to use with -site (default: from aliases / the host name)")
 	fs.Parse(args)
 
 	bad := 0
@@ -89,6 +92,9 @@ func runDoctor(args []string) int {
 	if *doTunnel && providers != nil && ssh != "" {
 		doctorTunnels(ctx, cfg, providers, report)
 	}
+	if *siteURL != "" {
+		doctorSite(ctx, cfg, *siteURL, *siteName, report)
+	}
 	if *doSend {
 		d := &notify.DingTalk{Webhook: cfg.DingTalk.Webhook, Secret: cfg.DingTalk.Secret, Keyword: cfg.DingTalk.Keyword, Mobiles: cfg.DingTalk.Mobiles}
 		err := d.Markdown(ctx, "login doctor", "### login doctor\n\nThis is a test message from `login doctor`. No action needed.")
@@ -98,8 +104,8 @@ func runDoctor(args []string) int {
 			report(true, "dingtalk test message", "sent; check the chat")
 		}
 	}
-	if !*doTunnel || !*doSend {
-		fmt.Println("[note] add -tunnel to test the tunnel providers and -send to test DingTalk")
+	if !*doTunnel || !*doSend || *siteURL == "" {
+		fmt.Println("[note] add -tunnel to test the tunnel providers, -send to test DingTalk, -site <url> to inspect a site")
 	}
 	if bad > 0 {
 		return 1
@@ -134,5 +140,35 @@ func doctorTunnels(ctx context.Context, cfg *config.Config, providers []*tunnel.
 			report(strings.Contains(string(b), "login-doctor"), "tunnel "+p.Name, fmt.Sprintf("%s (%s)", tn.URL, time.Since(start).Round(100*time.Millisecond)))
 		}
 		tn.Close()
+	}
+}
+
+// doctorSite resolves a site like the login tools do and asks its driver what it will do (no credentials).
+func doctorSite(ctx context.Context, cfg *config.Config, rawURL, name string, report func(bool, string, string)) {
+	if err := mcpserver.ApplySiteOptions(cfg); err != nil {
+		report(false, "site_options", err.Error())
+		return
+	}
+	d, base, err := mcpserver.Resolve(cfg, rawURL, name)
+	if err != nil {
+		report(false, "site "+rawURL, err.Error())
+		return
+	}
+	report(true, "site "+rawURL, fmt.Sprintf("driver %q, base URL %s", d.Name(), base))
+	if !d.NeedsLogin() {
+		fmt.Println("[note] this driver needs no login; the tool only checks that the URL answers")
+	}
+	in, ok := d.(site.Inspector)
+	if !ok {
+		fmt.Printf("[note] driver %q cannot inspect a server without logging in\n", d.Name())
+		return
+	}
+	findings, err := in.Inspect(ctx, base, &http.Client{Timeout: 30 * time.Second})
+	if err != nil {
+		report(false, "inspect "+d.Name(), err.Error())
+		return
+	}
+	for _, f := range findings {
+		fmt.Println("[info] " + f)
 	}
 }

@@ -137,3 +137,14 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 	}
 	return nil
 }
+
+// Inspect reports the login providers Kibana publishes.
+func (driver) Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error) {
+	c := site.JarClient(hc)
+	typ, name := loginProvider(ctx, c, base)
+	out := []string{fmt.Sprintf("login provider that will be used: type %q, name %q", typ, name)}
+	if typ == "basic" && name == "basic" {
+		out = append(out, "(this is also the fallback when /internal/security/login_state is unavailable)")
+	}
+	return out, nil
+}

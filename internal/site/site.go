@@ -55,6 +55,12 @@ type Configurable interface {
 	Configure(opts map[string]string)
 }
 
+// Inspector is implemented by drivers that can describe, without any credentials, what they will do against a
+// given server (login method, product generation, challenges). It powers `login doctor -site`.
+type Inspector interface {
+	Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error)
+}
+
 // Asker runs one human round (mode "login", "totp", ...) and returns the submitted fields.
 type Asker interface {
 	Ask(ctx context.Context, mode string, fields []Field) (Credentials, error)

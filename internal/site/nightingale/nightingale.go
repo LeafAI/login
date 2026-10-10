@@ -240,3 +240,20 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 	}
 	return nil
 }
+
+// Inspect reports whether login needs a captcha and an RSA-encrypted password.
+func (driver) Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error) {
+	a := &api{base: base, hc: hc}
+	show, err := a.showCaptcha(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pub, err := a.rsaKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		fmt.Sprintf("captcha required: %v (it is shown to the human in the login step)", show),
+		fmt.Sprintf("RSA-encrypted password required: %v", pub != nil),
+	}, nil
+}

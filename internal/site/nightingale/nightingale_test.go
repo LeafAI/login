@@ -173,3 +173,22 @@ func TestBadPasswordAndProbe(t *testing.T) {
 		t.Error("stale token accepted")
 	}
 }
+
+func TestInspect(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	srv := httptest.NewServer((&fakeN9e{captcha: true, rsaKey: key}).handler())
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	out, err := driver{}.Inspect(context.Background(), u, srv.Client())
+	got := strings.Join(out, " | ")
+	if err != nil || !strings.Contains(got, "captcha required: true") || !strings.Contains(got, "RSA-encrypted password required: true") {
+		t.Errorf("%q %v", got, err)
+	}
+	plain := httptest.NewServer((&fakeN9e{}).handler())
+	defer plain.Close()
+	u, _ = url.Parse(plain.URL)
+	out, _ = driver{}.Inspect(context.Background(), u, plain.Client())
+	if got := strings.Join(out, " | "); !strings.Contains(got, "captcha required: false") || !strings.Contains(got, "RSA-encrypted password required: false") {
+		t.Errorf("plain: %q", got)
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/LeafAI/login/internal/config"
 	"github.com/LeafAI/login/internal/flow"
 	"github.com/LeafAI/login/internal/session"
 	"github.com/LeafAI/login/internal/site"
@@ -249,21 +250,33 @@ func (s *Server) logout(_ context.Context, _ *mcp.CallToolRequest, in LogoutInpu
 }
 
 // alias returns the configured site name for a host, if any.
-func (s *Server) alias(base *url.URL) string {
+func aliasOf(cfg *config.Config, base *url.URL) string {
 	for _, k := range []string{base.Host, base.Hostname()} {
-		if n, ok := s.cfg.Aliases[k]; ok {
+		if n, ok := cfg.Aliases[k]; ok {
 			return n
 		}
 	}
 	return ""
 }
 
-// hostAllowed applies security.allowed_hosts (empty means every host is allowed).
-func (s *Server) hostAllowed(base *url.URL) bool {
-	if len(s.cfg.Security.AllowedHosts) == 0 {
+// rootOf applies roots: for sites served under a path prefix the drivers need the full base URL.
+func rootOf(cfg *config.Config, base *url.URL) *url.URL {
+	for _, k := range []string{base.Host, base.Hostname()} {
+		if r, ok := cfg.Roots[k]; ok {
+			if u, err := url.Parse(strings.TrimRight(r, "/")); err == nil && u.Scheme != "" && u.Host == base.Host {
+				return u
+			}
+		}
+	}
+	return base
+}
+
+// hostAllowedBy applies security.allowed_hosts (empty means every host is allowed).
+func hostAllowedBy(cfg *config.Config, base *url.URL) bool {
+	if len(cfg.Security.AllowedHosts) == 0 {
 		return true
 	}
-	for _, pat := range s.cfg.Security.AllowedHosts {
+	for _, pat := range cfg.Security.AllowedHosts {
 		for _, h := range []string{base.Host, base.Hostname()} {
 			if ok, _ := path.Match(strings.ToLower(pat), strings.ToLower(h)); ok {
 				return true
@@ -273,14 +286,27 @@ func (s *Server) hostAllowed(base *url.URL) bool {
 	return false
 }
 
-// root applies roots: for sites served under a path prefix the drivers need the full base URL.
-func (s *Server) root(base *url.URL) *url.URL {
-	for _, k := range []string{base.Host, base.Hostname()} {
-		if r, ok := s.cfg.Roots[k]; ok {
-			if u, err := url.Parse(strings.TrimRight(r, "/")); err == nil && u.Scheme != "" && u.Host == base.Host {
-				return u
-			}
-		}
+func (s *Server) alias(base *url.URL) string     { return aliasOf(s.cfg, base) }
+func (s *Server) root(base *url.URL) *url.URL    { return rootOf(s.cfg, base) }
+func (s *Server) hostAllowed(base *url.URL) bool { return hostAllowedBy(s.cfg, base) }
+
+// Resolve applies roots, aliases and allowed_hosts exactly as the login tools do and returns the driver and
+// the base URL it would be given.
+func Resolve(cfg *config.Config, raw, siteName string) (site.Driver, *url.URL, error) {
+	base, terr := baseOf(raw)
+	if terr != nil {
+		return nil, nil, terr
 	}
-	return base
+	if !hostAllowedBy(cfg, base) {
+		return nil, nil, errf("host_not_allowed", false, "%s is not in security.allowed_hosts", base.Host)
+	}
+	if siteName == "" {
+		siteName = aliasOf(cfg, base)
+	}
+	base = rootOf(cfg, base)
+	d, err := site.Resolve(siteName, base)
+	if err != nil {
+		return nil, nil, errf("unsupported_site", false, "%v", err)
+	}
+	return d, base, nil
 }

@@ -164,3 +164,26 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 	}
 	return nil
 }
+
+// Inspect reports the login form action and whether the session endpoint answers.
+func (driver) Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error) {
+	c := site.JarClient(hc)
+	page, status, err := get(ctx, c, base.String()+"/login?from=%2F")
+	if err != nil {
+		return nil, err
+	}
+	if status != 200 || !formTag.MatchString(page) {
+		return nil, fmt.Errorf("%s/login did not return a Jenkins login form (HTTP %d): wrong URL (context path? use roots:) or a non-password security realm", base, status)
+	}
+	action := "j_acegi_security_check"
+	if m := actionAtt.FindStringSubmatch(formTag.FindString(page)); m != nil {
+		action = m[1]
+	}
+	out := []string{"login form found, it posts to " + action}
+	if w, err := whoAmI(ctx, c, base); err == nil {
+		out = append(out, fmt.Sprintf("/whoAmI/api/json answers (anonymous=%v): success will be decided by it", w.Anonymous))
+	} else {
+		out = append(out, "warning: "+err.Error())
+	}
+	return out, nil
+}

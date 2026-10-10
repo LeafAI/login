@@ -190,3 +190,15 @@ func (*driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *ht
 	}
 	return nil
 }
+
+// Inspect reports which login method Login will use.
+func (d *driver) Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error) {
+	p, err := d.provider(ctx, base, hc)
+	if err != nil {
+		return nil, err
+	}
+	if p == "" {
+		return []string{"no LDAP identity provider found (or identity_provider: local): KubeSphere's local users are logged in through /oauth/token"}, nil
+	}
+	return []string{"identity provider " + p + " will be used: /oauth/login/" + p + " (LDAP users cannot use /oauth/token)"}, nil
+}

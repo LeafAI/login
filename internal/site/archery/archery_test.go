@@ -3,6 +3,7 @@ package archery
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -276,5 +277,23 @@ func TestLegacyHTMLErrorPagesAreErrors(t *testing.T) {
 	}
 	if f.Executed != 0 {
 		t.Error("executed despite the error page")
+	}
+}
+
+func TestInspectTellsTheGenerations(t *testing.T) {
+	for legacy, want := range map[bool]string{false: "REST", true: "1.x"} {
+		srv := httptest.NewServer((&archerytest.Fake{Legacy: legacy}).Handler())
+		u, _ := url.Parse(srv.URL)
+		out, err := driver{}.Inspect(context.Background(), u, srv.Client())
+		srv.Close()
+		if err != nil || !strings.Contains(strings.Join(out, " "), want) {
+			t.Errorf("legacy=%v: %v %v", legacy, out, err)
+		}
+	}
+	other := httptest.NewServer(http.NotFoundHandler())
+	defer other.Close()
+	u, _ := url.Parse(other.URL)
+	if _, err := (driver{}).Inspect(context.Background(), u, other.Client()); err == nil {
+		t.Error("a non-Archery server was accepted")
 	}
 }

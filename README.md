@@ -40,10 +40,13 @@ carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_T
 
 ## First run
 
+See `docs/OPERATING.md` for the full operator guide (setup order, per-site config, troubleshooting).
+
 ```
 login doctor                 # checks config, ssh, key dir, providers
 login doctor -tunnel         # starts each tunnel provider and fetches a page through it
 login doctor -send           # posts a test message through the DingTalk robot
+login doctor -site <url>     # no credentials: shows which driver/login method a site will get (use for every site)
 login page [dir]             # writes the static login page for local use
 ```
 

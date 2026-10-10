@@ -219,3 +219,31 @@ func (*driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *ht
 	}
 	return nil
 }
+
+// Inspect reports, from the unauthenticated sign-in page, which form Login would use.
+func (d *driver) Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error) {
+	page, err := get(ctx, site.JarClient(hc), base, "/users/sign_in")
+	if err != nil {
+		return nil, err
+	}
+	if csrf(page) == "" {
+		return nil, fmt.Errorf("no CSRF token on %s/users/sign_in: not GitLab, or an unexpected page", base)
+	}
+	var out []string
+	if m := ldapForm.FindStringSubmatch(page); m != nil {
+		out = append(out, fmt.Sprintf("LDAP sign-in tab found (provider %q): LDAP accounts are logged in through /users/auth/%s/callback", m[2], m[2]))
+	} else {
+		out = append(out, "no LDAP tab: the standard form (/users/sign_in) will be used")
+	}
+	switch m := d.option("login_method"); m {
+	case "ldap", "standard":
+		out = append(out, "site_options.gitlab.login_method forces: "+m)
+	}
+	if strings.Contains(page, `name="user[login]"`) {
+		out = append(out, "classic server-rendered sign-in page (GitLab before the Vue sign-in)")
+	} else {
+		out = append(out, "sign-in form is rendered by JavaScript (current GitLab); the driver posts the same fields")
+	}
+	out = append(out, "a TOTP prompt after the password is detected on both classic and Vue 2FA pages")
+	return out, nil
+}

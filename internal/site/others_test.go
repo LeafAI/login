@@ -116,3 +116,17 @@ func TestKibanaUnderPathPrefix(t *testing.T) {
 		t.Errorf("probe under /kibana: %v", err)
 	}
 }
+
+func TestKibanaInspect(t *testing.T) {
+	srv := httptest.NewServer(kibanaFake("basic1", false))
+	defer srv.Close()
+	d, _ := site.Resolve("kibana", mustURL(srv.URL))
+	in, ok := d.(site.Inspector)
+	if !ok {
+		t.Fatal("kibana driver is not an Inspector")
+	}
+	out, err := in.Inspect(context.Background(), mustURL(srv.URL), srv.Client())
+	if err != nil || !strings.Contains(strings.Join(out, " "), `name "basic1"`) {
+		t.Errorf("%v %v", out, err)
+	}
+}

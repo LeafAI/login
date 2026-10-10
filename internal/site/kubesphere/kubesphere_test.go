@@ -173,3 +173,25 @@ func TestProbe(t *testing.T) {
 		t.Error("revoked token accepted")
 	}
 }
+
+func TestInspect(t *testing.T) {
+	for name, tc := range map[string]struct {
+		f    *fakeKS
+		opts map[string]string
+		want string
+	}{
+		"ldap discovered": {&fakeKS{providers: ldapProviders()}, nil, "/oauth/login/ldap"},
+		"local only":      {&fakeKS{}, nil, "/oauth/token"},
+		"forced local":    {&fakeKS{providers: ldapProviders()}, map[string]string{"identity_provider": "local"}, "/oauth/token"},
+	} {
+		srv := httptest.NewServer(tc.f.handler())
+		d := &driver{}
+		d.Configure(tc.opts)
+		u, _ := url.Parse(srv.URL)
+		out, err := d.Inspect(context.Background(), u, srv.Client())
+		srv.Close()
+		if err != nil || !strings.Contains(strings.Join(out, " "), tc.want) {
+			t.Errorf("%s: %v %v", name, out, err)
+		}
+	}
+}
