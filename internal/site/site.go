@@ -3,12 +3,20 @@ package site
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
 	"sync"
 	"time"
+)
+
+// Errors drivers wrap so callers can classify failures.
+var (
+	ErrBadCredentials = errors.New("bad credentials")
+	ErrLoginRejected  = errors.New("login rejected by the site")
+	ErrUnreachable    = errors.New("site unreachable")
 )
 
 // Field describes one input the human is asked for in a round.
