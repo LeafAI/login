@@ -106,7 +106,7 @@ func (s *Server) register(m *mcp.Server) {
 	addTool(m, "logout", "Forget the cached session for a URL (or all sessions) and cancel a pending login for it.", nil, s.logout)
 	addTool(m, "archery_instances", "List Archery instances (and optionally an instance's databases) the user can access.", ro, s.archeryInstances)
 	addTool(m, "archery_query", "Run a read-only SQL query through Archery's query endpoint (no approval needed).", ro, s.archeryQuery)
-	addTool(m, "archery_run_sql", "Submit SQL to Archery, notify approvers, wait for approval, execute automatically and return the result, as one call. If approval takes longer than max_block_seconds a pending result with workflow_id is returned; continue with archery_wait.", &mcp.ToolAnnotations{DestructiveHint: &destructive}, s.archeryRunSQL)
+	addTool(m, "archery_run_sql", "Submit SQL to Archery, notify approvers, wait for approval, execute automatically and return the result, as one call. If approval takes longer than max_block_seconds a pending result with audit_id is returned; continue with archery_wait.", &mcp.ToolAnnotations{DestructiveHint: &destructive}, s.archeryRunSQL)
 	addTool(m, "archery_wait", "Continue waiting for an Archery workflow; executes it once when approved. Safe to call repeatedly.", &mcp.ToolAnnotations{IdempotentHint: true}, s.archeryWait)
 	addTool(m, "archery_workflow_status", "Read the state of an Archery workflow.", ro, s.archeryStatus)
 	addTool(m, "archery_cancel", "Abort an Archery workflow that has not started executing.", nil, s.archeryCancel)

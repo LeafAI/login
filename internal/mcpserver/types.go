@@ -134,11 +134,10 @@ type RunSQLInput struct {
 	ArcheryURL
 	Instance        string `json:"instance"`
 	Database        string `json:"database"`
-	Schema          string `json:"schema,omitempty"`
 	SQL             string `json:"sql"`
 	Title           string `json:"title" jsonschema:"Workflow name shown to approvers (max 50 chars)."`
 	Remark          string `json:"remark,omitempty"`
-	ResourceGroup   string `json:"resource_group,omitempty"`
+	ResourceGroup   string `json:"resource_group,omitempty" jsonschema:"Archery resource group name; defaults to archery.default_group."`
 	Backup          *bool  `json:"backup,omitempty"`
 	Wait            *bool  `json:"wait,omitempty"`
 	MaxBlockSeconds int    `json:"max_block_seconds,omitempty"`
@@ -147,7 +146,7 @@ type RunSQLInput struct {
 
 type WaitInput struct {
 	ArcheryURL
-	WorkflowID      int `json:"workflow_id"`
+	AuditID         int `json:"audit_id" jsonschema:"The audit_id returned by archery_run_sql."`
 	MaxBlockSeconds int `json:"max_block_seconds,omitempty"`
 }
 
@@ -159,18 +158,21 @@ type ArcheryOut struct {
 
 type StatusInput struct {
 	ArcheryURL
-	WorkflowID int `json:"workflow_id"`
+	AuditID int `json:"audit_id"`
 }
 
 type StatusOutput struct {
-	archery.Workflow
-	Results []archery.ResultRow `json:"results,omitempty"`
+	AuditID     int                 `json:"audit_id"`
+	Status      string              `json:"status"`      // awaiting_approval | approved | executing | done | failed | aborted | check_failed
+	StatusCode  string              `json:"status_code"` // Archery's own workflow status
+	WorkflowURL string              `json:"workflow_url"`
+	Results     []archery.ResultRow `json:"results,omitempty"`
 }
 
 type CancelInput struct {
 	ArcheryURL
-	WorkflowID int    `json:"workflow_id"`
-	Reason     string `json:"reason,omitempty"`
+	AuditID int    `json:"audit_id"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type CancelOutput struct {

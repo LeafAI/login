@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -43,6 +44,10 @@ func archeryErr(err error) *ToolError {
 	case errors.As(err, &cf):
 		e := errf("sql_check_failed", false, "%v", err)
 		e.Hint = "Fix the SQL and call archery_run_sql again."
+		return e
+	case errors.Is(err, archery.ErrSessionInvalid):
+		e := errf("session_expired", true, "%v", err)
+		e.Hint = "Call login with force_refresh=true, then retry."
 		return e
 	case errors.Is(err, archery.ErrNotFound):
 		return errf("workflow_not_found", false, "%v", err)
@@ -143,7 +148,7 @@ func (s *Server) archeryRunSQL(ctx context.Context, req *mcp.CallToolRequest, in
 	if in.Wait != nil && !*in.Wait {
 		return finishOutcome(sub), nil
 	}
-	return s.waitWorkflow(ctx, req, c, sub.WorkflowID, max, sub.Check)
+	return s.waitWorkflow(ctx, req, c, sub.AuditID, max, sub.Check)
 }
 
 func (s *Server) waitWorkflow(ctx context.Context, req *mcp.CallToolRequest, c *archery.Client, id int, max time.Duration, check []archery.CheckRow) (any, *ToolError) {
@@ -169,7 +174,7 @@ func (s *Server) archeryWait(ctx context.Context, req *mcp.CallToolRequest, in W
 	if pending != nil {
 		return pendingLogin(pending), nil
 	}
-	return s.waitWorkflow(ctx, req, c, in.WorkflowID, max, nil)
+	return s.waitWorkflow(ctx, req, c, in.AuditID, max, nil)
 }
 
 func (s *Server) archeryStatus(ctx context.Context, req *mcp.CallToolRequest, in StatusInput) (any, *ToolError) {
@@ -180,13 +185,14 @@ func (s *Server) archeryStatus(ctx context.Context, req *mcp.CallToolRequest, in
 	if pending != nil {
 		return pendingLogin(pending), nil
 	}
-	w, err := c.Status(ctx, in.WorkflowID, "")
+	code, err := c.Status(ctx, in.AuditID)
 	if err != nil {
 		return nil, archeryErr(err)
 	}
-	out := StatusOutput{Workflow: *w}
-	if w.Phase == archery.PhaseDone || w.Phase == archery.PhaseFailed {
-		if out.Results, err = c.Results(ctx, in.WorkflowID); err != nil {
+	phase := archery.PhaseOf(code)
+	out := StatusOutput{AuditID: in.AuditID, Status: phase, StatusCode: code, WorkflowURL: strings.TrimRight(c.Base.String(), "/") + "/workflow/" + itoa(in.AuditID) + "/"}
+	if phase == archery.PhaseDone || phase == archery.PhaseFailed {
+		if out.Results, err = c.Results(ctx, in.AuditID); err != nil {
 			return nil, archeryErr(err)
 		}
 	}
@@ -201,14 +207,14 @@ func (s *Server) archeryCancel(ctx context.Context, req *mcp.CallToolRequest, in
 	if pending != nil {
 		return pendingLogin(pending), nil
 	}
-	w, err := c.Status(ctx, in.WorkflowID, "")
+	code, err := c.Status(ctx, in.AuditID)
 	if err != nil {
 		return nil, archeryErr(err)
 	}
-	if w.Phase == archery.PhaseExecuting || w.Phase == archery.PhaseDone || w.Phase == archery.PhaseFailed {
-		return nil, errf("invalid_argument", false, "workflow %d is already %s and cannot be cancelled", in.WorkflowID, w.Phase)
+	if phase := archery.PhaseOf(code); phase == archery.PhaseExecuting || phase == archery.PhaseDone || phase == archery.PhaseFailed || phase == archery.PhaseAborted {
+		return nil, errf("invalid_argument", false, "workflow %d is already %s and cannot be cancelled", in.AuditID, phase)
 	}
-	if err := c.Cancel(ctx, in.WorkflowID, in.Reason); err != nil {
+	if err := c.Cancel(ctx, in.AuditID, in.Reason); err != nil {
 		return nil, archeryErr(err)
 	}
 	return CancelOutput{Status: "aborted"}, nil

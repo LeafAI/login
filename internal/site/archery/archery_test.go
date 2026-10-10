@@ -3,7 +3,6 @@ package archery
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -13,15 +12,14 @@ import (
 
 	"github.com/LeafAI/login/internal/site"
 	"github.com/LeafAI/login/internal/site/archery/archerytest"
-	"github.com/LeafAI/login/internal/site/sitetest"
 )
 
-func setup(t *testing.T, f *archerytest.Fake, answers map[string]site.Credentials) (*Client, *sitetest.Asker) {
+func setup(t *testing.T, f *archerytest.Fake, answers map[string]site.Credentials) (*Client, *sitetestAsker) {
 	t.Helper()
 	srv := httptest.NewServer(f.Handler())
 	t.Cleanup(srv.Close)
 	base, _ := url.Parse(srv.URL)
-	a := &sitetest.Asker{Answers: answers}
+	a := &sitetestAsker{Answers: answers}
 	s, err := driver{}.Login(context.Background(), base, a, srv.Client())
 	if err != nil {
 		t.Fatalf("login: %v", err)
@@ -29,18 +27,42 @@ func setup(t *testing.T, f *archerytest.Fake, answers map[string]site.Credential
 	return &Client{Base: base, Sess: s, HC: srv.Client()}, a
 }
 
+type sitetestAsker struct {
+	Answers map[string]site.Credentials
+	Asked   []string
+}
+
+func (a *sitetestAsker) Ask(_ context.Context, mode string, _ []site.Field) (site.Credentials, error) {
+	a.Asked = append(a.Asked, mode)
+	c, ok := a.Answers[mode]
+	if !ok {
+		return nil, errors.New("unexpected round " + mode)
+	}
+	return c, nil
+}
+
 var okCreds = map[string]site.Credentials{"login": {"username": "alice", "password": "pw"}, "totp": {"code": "123456"}}
 
-func TestLoginAnd2FA(t *testing.T) {
-	f := &archerytest.Fake{}
-	_, a := setup(t, f, okCreds)
+func TestLoginWithoutAndWith2FA(t *testing.T) {
+	c, a := setup(t, &archerytest.Fake{}, okCreds)
 	if strings.Join(a.Asked, ",") != "login" {
 		t.Errorf("asked %v", a.Asked)
 	}
+	if c.Sess.Headers["X-CSRFToken"] != "CSRF2" {
+		t.Errorf("csrf token after login not refreshed: %q", c.Sess.Headers["X-CSRFToken"])
+	}
+	// the cached session is accepted by Probe
+	if err := (driver{}).Probe(context.Background(), c.Base, c.Sess, c.HC); err != nil {
+		t.Errorf("probe: %v", err)
+	}
+
 	f2 := &archerytest.Fake{TwoFA: true}
-	_, a = setup(t, f2, okCreds)
-	if strings.Join(a.Asked, ",") != "login,totp" || !f2.Verified {
-		t.Errorf("2fa asked %v verified=%v", a.Asked, f2.Verified)
+	c2, a2 := setup(t, f2, okCreds)
+	if strings.Join(a2.Asked, ",") != "login,totp" || !f2.Verified {
+		t.Errorf("2fa asked %v verified=%v", a2.Asked, f2.Verified)
+	}
+	if _, err := c2.Instances(context.Background()); err != nil {
+		t.Errorf("session after 2fa unusable: %v", err)
 	}
 }
 
@@ -48,28 +70,41 @@ func TestLoginFailures(t *testing.T) {
 	srv := httptest.NewServer((&archerytest.Fake{TwoFA: true}).Handler())
 	defer srv.Close()
 	base, _ := url.Parse(srv.URL)
-	bad := &sitetest.Asker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "x"}}}
+	bad := &sitetestAsker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "x"}}}
 	if _, err := (driver{}).Login(context.Background(), base, bad, srv.Client()); !errors.Is(err, site.ErrBadCredentials) {
 		t.Errorf("bad password: %v", err)
 	}
-	wrongCode := &sitetest.Asker{Answers: map[string]site.Credentials{"login": okCreds["login"], "totp": {"code": "000000"}}}
+	wrongCode := &sitetestAsker{Answers: map[string]site.Credentials{"login": okCreds["login"], "totp": {"code": "000000"}}}
 	if _, err := (driver{}).Login(context.Background(), base, wrongCode, srv.Client()); !errors.Is(err, site.ErrBadCredentials) {
 		t.Errorf("bad otp: %v", err)
 	}
 }
 
-func TestQueryAndInstances(t *testing.T) {
+func TestQueryInstancesDatabases(t *testing.T) {
 	c, _ := setup(t, &archerytest.Fake{}, okCreds)
-	q, err := c.Query(context.Background(), QueryRequest{Instance: "prod", Database: "d", SQL: "select 1", Limit: 100})
+	ctx := context.Background()
+	q, err := c.Query(ctx, QueryRequest{Instance: "prod", Database: "d", SQL: "select 1", Limit: 100})
 	if err != nil || q.RowCount != 2 || q.Columns[1] != "name" || q.CostMS != 12 {
 		t.Fatalf("%+v %v", q, err)
 	}
-	ins, err := c.Instances(context.Background())
-	if err != nil || len(ins) != 1 || ins[0].Name != "prod" {
+	ins, err := c.Instances(ctx)
+	if err != nil || len(ins) != 1 || ins[0].Name != "prod" || ins[0].ID != 7 {
 		t.Fatalf("%+v %v", ins, err)
+	}
+	dbs, err := c.Databases(ctx, "prod")
+	if err != nil || len(dbs) != 2 {
+		t.Fatalf("%v %v", dbs, err)
 	}
 	if !IsReadOnly("SELECT 1;") || IsReadOnly("delete from t") || IsReadOnly("select 1; drop table t") {
 		t.Error("IsReadOnly misclassified")
+	}
+}
+
+func TestExpiredSessionIsReported(t *testing.T) {
+	c, _ := setup(t, &archerytest.Fake{}, okCreds)
+	c.Sess.Cookies = nil // logged out
+	if _, err := c.Instances(context.Background()); !errors.Is(err, ErrSessionInvalid) {
+		t.Errorf("want ErrSessionInvalid, got %v", err)
 	}
 }
 
@@ -80,6 +115,10 @@ func (r *recNotifier) Markdown(_ context.Context, title, text string) error {
 	return nil
 }
 
+func submitReq(sql string) SubmitRequest {
+	return SubmitRequest{Instance: "prod", Database: "d", SQL: sql, Title: "t", Group: "dba", Backup: true}
+}
+
 func TestRunSQLApprovalToExecution(t *testing.T) {
 	f := &archerytest.Fake{}
 	c, _ := setup(t, f, okCreds)
@@ -87,12 +126,13 @@ func TestRunSQLApprovalToExecution(t *testing.T) {
 	tr.Poll = 10 * time.Millisecond
 	n := &recNotifier{}
 
-	sub, err := tr.Submit(context.Background(), c, n, SubmitRequest{Instance: "prod", Database: "d", SQL: "UPDATE t SET a=1", Title: "t", Group: "dba", Backup: true}, 0)
-	if err != nil || sub.WorkflowID != 42 || len(n.msgs) != 1 || !strings.Contains(n.msgs[0], "/detail/42/") {
+	sub, err := tr.Submit(context.Background(), c, n, submitReq("UPDATE t SET a=1"), 0)
+	if err != nil || sub.AuditID != archerytest.AuditID || sub.WorkflowID != archerytest.WorkflowID || len(n.msgs) != 1 || !strings.Contains(n.msgs[0], "/workflow/42/") {
 		t.Fatalf("submit: %+v %v %v", sub, err, n.msgs)
 	}
-	if f.Submitted.Get("group_name") != "dba" || f.Submitted.Get("is_backup") != "True" {
-		t.Errorf("submitted form: %v", f.Submitted)
+	wf := f.Submitted["workflow"].(map[string]any)
+	if wf["group_id"] != float64(3) || wf["instance"] != float64(7) || wf["is_backup"] != true || wf["workflow_name"] != "t" {
+		t.Errorf("submitted workflow: %v", wf)
 	}
 
 	// Not approved yet: wait times out as pending and does NOT execute.
@@ -126,15 +166,24 @@ func TestRunSQLApprovalToExecution(t *testing.T) {
 
 func TestSubmitGuards(t *testing.T) {
 	c, _ := setup(t, &archerytest.Fake{}, okCreds)
-	noDDL := NewTracker(false, time.Minute)
-	if _, err := noDDL.Submit(context.Background(), c, nil, SubmitRequest{SQL: "ALTER TABLE t ADD c int", Title: "t"}, 0); !errors.Is(err, ErrDDLDisabled) {
+	ctx := context.Background()
+	if _, err := NewTracker(false, time.Minute).Submit(ctx, c, nil, submitReq("ALTER TABLE t ADD c int"), 0); !errors.Is(err, ErrDDLDisabled) {
 		t.Errorf("ddl: %v", err)
 	}
-	withDDL := NewTracker(true, time.Minute)
-	_, err := withDDL.Submit(context.Background(), c, nil, SubmitRequest{SQL: "BADSQL", Title: "t"}, 0)
+	tr := NewTracker(true, time.Minute)
 	var cf *CheckFailed
-	if !errors.As(err, &cf) || !strings.Contains(err.Error(), "syntax error") {
+	if _, err := tr.Submit(ctx, c, nil, submitReq("BADSQL"), 0); !errors.As(err, &cf) || !strings.Contains(err.Error(), "syntax error") {
 		t.Errorf("check: %v", err)
+	}
+	r := submitReq("UPDATE t SET a=1")
+	r.Group = "nope"
+	if _, err := tr.Submit(ctx, c, nil, r, 0); err == nil || !strings.Contains(err.Error(), "available: dba, dev") {
+		t.Errorf("unknown group: %v", err)
+	}
+	r = submitReq("UPDATE t SET a=1")
+	r.Instance = "ghost"
+	if _, err := tr.Submit(ctx, c, nil, r, 0); err == nil || !strings.Contains(err.Error(), "not writable") {
+		t.Errorf("unknown instance: %v", err)
 	}
 }
 
@@ -143,12 +192,34 @@ func TestApprovalTimeoutCancels(t *testing.T) {
 	c, _ := setup(t, f, okCreds)
 	tr := NewTracker(true, time.Minute)
 	tr.Poll = 5 * time.Millisecond
-	if _, err := tr.Submit(context.Background(), c, nil, SubmitRequest{SQL: "UPDATE t SET a=1", Title: "t"}, 20*time.Millisecond); err != nil {
+	if _, err := tr.Submit(context.Background(), c, nil, submitReq("UPDATE t SET a=1"), 20*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	out, err := tr.Wait(context.Background(), c, 42, 2*time.Second, nil)
-	if err != nil || out.Status != "aborted" || !f.Cancelled || f.Executed != 0 {
-		t.Fatalf("%+v %v cancelled=%v", out, err, f.Cancelled)
+	if err != nil || out.Status != "aborted" || !f.Cancelled || f.Executed != 0 || f.CancelRemark == "" {
+		t.Fatalf("%+v %v cancelled=%v remark=%q", out, err, f.Cancelled, f.CancelRemark)
 	}
-	_ = fmt.Sprint
+}
+
+func TestRejectedVersusCancelled(t *testing.T) {
+	for _, tc := range []struct{ op, info, want string }{
+		{"审核不通过", "touches the orders table", "rejected"},
+		{"审核取消", "changed my mind", "aborted"},
+	} {
+		f := &archerytest.Fake{Status: "workflow_abort", LogOp: tc.op, LogInfo: tc.info}
+		c, _ := setup(t, f, okCreds)
+		tr := NewTracker(true, time.Minute)
+		tr.Poll = 5 * time.Millisecond
+		out, err := tr.Wait(context.Background(), c, 42, time.Second, nil)
+		if err != nil || out.Status != tc.want || out.Reason != tc.info || out.By != "lisi" {
+			t.Errorf("%s: %+v %v", tc.op, out, err)
+		}
+	}
+}
+
+func TestUnknownWorkflow(t *testing.T) {
+	c, _ := setup(t, &archerytest.Fake{}, okCreds)
+	if _, err := c.Status(context.Background(), 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v", err)
+	}
 }

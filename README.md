@@ -113,7 +113,9 @@ Verified in automated tests: key rotation, PGP round trip between openpgp.js and
 tunnel banner parsing and fallback (with a fake `ssh`), real HTTP traffic through a real `ssh -R` forward
 (local `sshd`), `ssh` accepting every built-in provider command line, DingTalk signing, the full login/2FA/reject flow in a
 real browser, and every site driver against *fake* servers that imitate the flows.
+**Archery** support targets current Archery (the `/api/v1/sql-workflows/` REST API); endpoints, payloads and the
+2FA flow were checked against the Archery source code, then exercised against a fake server.
+
 **Not verified against live systems:** the real SSH provider services (use `login doctor -tunnel`), a real DingTalk robot, and the live
-GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. In particular the Archery 2FA and workflow-list/result
-endpoints, and the second-factor handling of Kibana/KubeSphere/Nightingale (stock versions of these have no
-TOTP), are best-effort and need a live check.
+GitLab/Kibana/KubeSphere/Nightingale/Archery endpoints. The second-factor handling of Kibana/KubeSphere/Nightingale (stock versions of these have no TOTP) is
+best-effort and needs a live check.

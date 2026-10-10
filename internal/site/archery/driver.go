@@ -1,7 +1,10 @@
 // Package archery implements the Archery (SQL audit platform) login driver and API client.
 //
-// The endpoints used here follow Archery's web UI (Django views). They have been exercised against
-// a fake server only; verify them against your Archery version before relying on them.
+// Endpoints and payloads follow the Archery source (github.com/hhyo/Archery, master): the ajax login
+// at /authenticate/, the 2FA verification at /api/v1/user/2fa/verify/, and the session-authenticated
+// REST API under /api/v1/ (sqlquery, workflow/sqlcheck, sql-workflows). Older Archery releases that
+// predate those REST endpoints are not supported. The package is tested against a fake server that
+// mimics this contract, not against a live Archery.
 package archery
 
 import (
@@ -63,18 +66,25 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 	if env.Status != 0 {
 		return nil, fmt.Errorf("%w: %s", site.ErrBadCredentials, site.Clip(env.Msg, 200))
 	}
-	// Second factor: Archery's authenticate answer points at its 2FA page when the account has it.
-	if needs2FA(env) {
+	// Archery answers data=null when the user is logged in. With 2FA it answers a temporary session
+	// key, which its own login page stores as the sessionid cookie before opening /login/2fa/.
+	var tempKey string
+	json.Unmarshal(env.Data, &tempKey)
+	if tempKey != "" {
+		c.Jar.SetCookies(base, []*http.Cookie{{Name: "sessionid", Value: tempKey, Path: "/"}})
 		code, err := ask.Ask(ctx, "totp", site.TOTPFields)
 		if err != nil {
 			return nil, err
 		}
-		v, err := postForm(ctx, c, base, "/twofa/verify/", url.Values{
+		v, err := postForm(ctx, c, base, "/api/v1/user/2fa/verify/", url.Values{
 			"engineer": {creds["username"]}, "otp": {strings.TrimSpace(code["code"])}, "auth_type": {"totp"}})
 		if err != nil {
 			return nil, err
 		}
 		if v.Status != 0 {
+			if strings.Contains(v.Msg, "未配置") {
+				return nil, fmt.Errorf("%w: Archery enforces 2FA but this account has not set it up; configure it in Archery first", site.ErrLoginRejected)
+			}
 			return nil, fmt.Errorf("%w: invalid two-factor code: %s", site.ErrBadCredentials, site.Clip(v.Msg, 200))
 		}
 	}
@@ -87,12 +97,6 @@ func (driver) Login(ctx context.Context, base *url.URL, ask site.Asker, hc *http
 		return nil, fmt.Errorf("%w: no sessionid cookie was issued", site.ErrLoginRejected)
 	}
 	return s, nil
-}
-
-func needs2FA(env *envelope) bool {
-	var data string
-	json.Unmarshal(env.Data, &data)
-	return strings.Contains(strings.ToLower(data), "2fa") || strings.Contains(strings.ToLower(env.Msg), "2fa")
 }
 
 func postForm(ctx context.Context, c *http.Client, base *url.URL, path string, form url.Values) (*envelope, error) {
@@ -112,9 +116,9 @@ func postForm(ctx context.Context, c *http.Client, base *url.URL, path string, f
 	return &env, nil
 }
 
-// Probe fetches a login-protected page without following redirects.
+// Probe calls an authenticated REST endpoint (403 when the session is gone).
 func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *http.Client) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/sqlquery/", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String()+"/api/v1/sqlquery/instances/", nil)
 	req.Header.Set("Cookie", site.CookieHeader(s.Cookies))
 	resp, err := site.NoRedirect(hc).Do(req)
 	if err != nil {
