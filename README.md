@@ -27,6 +27,9 @@ carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_T
 
 ## Security notes
 
+- The static login page was reviewed in depth: see `docs/static-page-review.md` (findings, fixes, residual risks).
+  Notably, the human must compare a short **key code** shown on the page with the one in the DingTalk message
+  before the page lets them submit, and after a link is accepted the page can only talk to that link's tunnel.
 - Agent-supplied text (`reason`, SQL title/remark/SQL) is escaped before it is put in DingTalk markdown, so it
   cannot add links or formatting to the message the human acts on.
 - `security.allowed_hosts` limits which sites the agent can target.
@@ -63,7 +66,7 @@ tunnel:
       command: ssh -R 0.0.0.0:{{port}}:localhost:{{port}} jump.corp.example
       url: https://jump.corp.example:{{port}}       # or url_regex to parse a printed URL
 web:
-  page_url: https://leafai.github.io/login/v0.1.0/  # or file:///path/to/login-page/index.html
+  page_url: https://leafai.github.io/login/   # or file:///path/to/login-page/index.html
   ttl: 10m                                          # per round
 keys: {max_uses: 8, max_age: 24h}
 sessions:

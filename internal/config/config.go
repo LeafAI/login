@@ -150,7 +150,7 @@ func (c *Config) applyDefaults(dir string) {
 		c.Sessions.Dir = filepath.Join(dir, "sessions")
 	}
 	if c.Web.PageURL == "" {
-		c.Web.PageURL = "https://leafai.github.io/login/v0.1.0/"
+		c.Web.PageURL = "https://leafai.github.io/login/"
 	}
 	if c.Web.TTL == 0 {
 		c.Web.TTL = 10 * time.Minute

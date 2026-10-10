@@ -120,7 +120,7 @@ the human receives, not something the API tells the page.
 
 Round link (sent in DingTalk, clicked by the human):
 ```
-https://leafai.github.io/login/v0.1.0/#v=1&site=gitlab.corp.example&mode=totp&round=2
+https://leafai.github.io/login/#v=1&site=gitlab.corp.example&mode=totp&round=2
   &u=<urlenc https://x.pinggy.link/<token>>&k=<base64url binary OpenPGP public key>&f=<fingerprint>
 ```
 - Parameters live in the **fragment (`#`), not the query (`?`)**: fragments are never sent to any

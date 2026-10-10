@@ -2,8 +2,10 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -31,6 +33,19 @@ func WriteTo(dir string) error {
 		}
 	}
 	return nil
+}
+
+// Checksums returns the SHA-256 of every embedded page file, in `sha256sum` format ("<hex>  <name>"),
+// sorted by name. The same sums are published as SHA256SUMS next to the hosted page.
+func Checksums() []string {
+	ents, _ := static.ReadDir("static")
+	var out []string
+	for _, e := range ents {
+		b, _ := static.ReadFile("static/" + e.Name())
+		sum := sha256.Sum256(b)
+		out = append(out, hex.EncodeToString(sum[:])+"  "+e.Name())
+	}
+	return out
 }
 
 // Field is a custom form field carried in the link (mode "custom").

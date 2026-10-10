@@ -396,15 +396,17 @@ func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, n
 	if reason == "" {
 		reason = "(not given)"
 	}
-	short := fpr
+	short := strings.ToUpper(fpr)
 	if len(short) > 16 {
 		short = short[len(short)-16:]
 	}
-	if note != "" {
-		note = "**" + note + "**\n\n"
+	var groups []string // "8885 4F38 DA77 58C0": identical to the verification code the page shows
+	for i := 0; i+4 <= len(short); i += 4 {
+		groups = append(groups, short[i:i+4])
 	}
+	short = strings.Join(groups, " ")
 	return note + fmt.Sprintf("### Login request: %s\n\n"+
-		"- **Step %d**: %s\n- **Requested by AI agent**: %s\n- **Expires**: %s\n- **Key**: `%s`\n\n"+
+		"- **Step %d**: %s\n- **Requested by AI agent**: %s\n- **Expires**: %s\n- **Key code** (compare it with the page): `%s`\n\n"+
 		"[Open the login page](%s)\n\n"+
 		"You can also press **Reject** on the page and give a reason. "+
 		"If you did not expect this, ignore it.",

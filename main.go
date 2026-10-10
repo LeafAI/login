@@ -43,6 +43,10 @@ func main() {
 			log.Fatal(err)
 		}
 		abs, _ := filepath.Abs(dir)
+		fmt.Println("SHA-256 of the page files (the hosted page publishes the same SHA256SUMS):")
+		for _, line := range web.Checksums() {
+			fmt.Println("  " + line)
+		}
 		fmt.Printf("wrote the login page to %s\nOpen %s/index.html in a browser, then paste the link from DingTalk\n"+
 			"(or set web.page_url to file://%s/index.html so links point at this copy).\n", abs, abs, abs)
 		return
