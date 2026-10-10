@@ -44,7 +44,7 @@ main.go                      # package main: flags/config, wire everything, serv
 internal/
   mcpserver/                 # tool registration (login, login_sessions, logout, archery_*)
   keyring/                   # GPG key pool (≤8), generate/reuse, armored export, decrypt
-  api/                       # one-shot JSON API behind the tunnel: /mode, /submit, /status (no HTML)
+  api/                       # one-shot JSON API behind the tunnel: /submit, /status per round (no HTML)
   web/                       # static login.html + vendored openpgp.min.js (go:embed; see 4.3)
   tunnel/                    # Provider interface, built-ins, custom providers, ssh runner, fallback
   notify/                    # DingTalk robot client (HMAC-SHA256 signed webhook)
