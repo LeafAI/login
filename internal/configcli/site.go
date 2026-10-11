@@ -15,7 +15,7 @@ import (
 
 func cmdSite(env Env, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: login config site add [url] | custom | list | remove <host|name>")
+		return errors.New("usage: securl config site add [url] | custom | list | remove <host|name>")
 	}
 	switch args[0] {
 	case "add":
@@ -26,7 +26,7 @@ func cmdSite(env Env, args []string) error {
 		return siteList(env)
 	case "remove":
 		if len(args) != 2 {
-			return errors.New("usage: login config site remove <host|name>")
+			return errors.New("usage: securl config site remove <host|name>")
 		}
 		return siteRemove(env, args[1])
 	}
@@ -88,7 +88,7 @@ func siteAdd(env Env, args []string) error {
 		return err
 	}
 	p.Say("\nNo password is needed here: the person is asked when an agent first logs in.")
-	p.Say("Check what login will do with this site (no credentials sent): login doctor -site %s", u.Scheme+"://"+u.Host)
+	p.Say("Check what login will do with this site (no credentials sent): securl doctor -site %s", u.Scheme+"://"+u.Host)
 	return nil
 }
 
@@ -287,7 +287,7 @@ func siteRemove(env Env, what string) error {
 		}
 	}
 	if !removed {
-		return fmt.Errorf("nothing is configured for %q (see `login config site list`)", host)
+		return fmt.Errorf("nothing is configured for %q (see `securl config site list`)", host)
 	}
 	if err := commit(env, ed); err != nil {
 		return err

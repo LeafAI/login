@@ -11,6 +11,7 @@ import (
 	"github.com/LeafAI/securl/internal/site"
 	_ "github.com/LeafAI/securl/internal/site/gitlab"
 	_ "github.com/LeafAI/securl/internal/site/kubesphere"
+	"github.com/LeafAI/securl/internal/vault"
 
 	_ "github.com/LeafAI/securl/internal/site/noauth"
 )
@@ -20,8 +21,9 @@ func TestAliasSelectsDriver(t *testing.T) {
 	defer ts.Close()
 	cfg, _ := config.Load(t.TempDir() + "/none.yaml")
 	cfg.Keys.Dir = t.TempDir()
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	cfg.Aliases = map[string]string{ts.Listener.Addr().String(): "skywalking"}
-	_, s, err := New(cfg, Options{})
+	_, s, err := New(cfg, Options{Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +41,9 @@ func TestAliasSelectsDriver(t *testing.T) {
 func TestAllowedHosts(t *testing.T) {
 	cfg, _ := config.Load(t.TempDir() + "/none.yaml")
 	cfg.Keys.Dir = t.TempDir()
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	cfg.Security.AllowedHosts = []string{"*.corp.example", "skywalking.other:8080"}
-	_, s, err := New(cfg, Options{})
+	_, s, err := New(cfg, Options{Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,24 +72,36 @@ func TestPersistentSessionsSurviveRestart(t *testing.T) {
 	}))
 	defer ts.Close()
 	dir := t.TempDir()
-	newServer := func() *Server {
+	const pass = "correct horse battery staple"
+	newServer := func(firstRun bool) *Server {
 		cfg, _ := config.Load(dir + "/none.yaml")
 		cfg.Keys.Dir = dir + "/keys"
-		cfg.Sessions.Persist = true
-		_, s, err := New(cfg, Options{})
+		cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
+		v := vault.NewWithCost(cfg.Vault.Dir, 1, 8, 1)
+		_, s, err := New(cfg, Options{Vault: v})
 		if err != nil {
+			t.Fatal(err)
+		}
+		if firstRun {
+			if err := v.Init(pass); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// "Restart": a brand-new process starts locked and is opened with the passphrase.
+		if err := s.UnlockWith(pass); err != nil {
 			t.Fatal(err)
 		}
 		return s
 	}
-	first := newServer()
+	first := newServer(true)
 	d, _ := site.Resolve("gitlab", nil)
 	base, _ := url.Parse(ts.URL)
-	first.cache.Put(base, d, &site.Session{Cookies: []*http.Cookie{{Name: "_gitlab_session", Value: "persisted"}}})
+	first.core.cache.Put(base, d, &site.Session{Cookies: []*http.Cookie{{Name: "_gitlab_session", Value: "persisted"}}})
+	first.Lock()
 
-	// "Restart": a brand-new server process reads the same store; no human is involved.
-	out, terr := newServer().ensureLogin(context.Background(), nil, ts.URL, "gitlab", "", false, true, 0)
-	if terr != nil || !out.Cached || out.CookieHeader != "_gitlab_session=persisted" {
+	// A brand-new server process reads the same vault; no human is involved.
+	out, terr := newServer(false).ensureLogin(context.Background(), nil, ts.URL, "gitlab", "", false, true, 0)
+	if terr != nil || !out.Cached {
 		t.Fatalf("restart: %+v %v", out, terr)
 	}
 }
@@ -98,9 +113,10 @@ func TestRootsSupplyPathPrefix(t *testing.T) {
 	defer ts.Close()
 	cfg, _ := config.Load(t.TempDir() + "/none.yaml")
 	cfg.Keys.Dir = t.TempDir()
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	host := ts.Listener.Addr().String()
 	cfg.Aliases = map[string]string{host: "skywalking"}
-	_, s, err := New(cfg, Options{})
+	_, s, err := New(cfg, Options{Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +142,9 @@ func TestSiteOptionsValidation(t *testing.T) {
 	mk := func(opts map[string]map[string]string) error {
 		cfg, _ := config.Load(t.TempDir() + "/none.yaml")
 		cfg.Keys.Dir = t.TempDir()
+		cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 		cfg.SiteOptions = opts
-		_, _, err := New(cfg, Options{})
+		_, _, err := New(cfg, Options{Vault: testVault(t, cfg)})
 		return err
 	}
 	if err := mk(map[string]map[string]string{"gitlab": {"login_method": "ldap"}, "kubesphere": {"identity_provider": "ldap"}}); err != nil {

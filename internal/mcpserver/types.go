@@ -1,7 +1,13 @@
 package mcpserver
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strconv"
 	"time"
+
+	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/LeafAI/securl/internal/site/archery"
 )
@@ -20,19 +26,9 @@ func errf(code string, retryable bool, format string, a ...any) *ToolError {
 	return &ToolError{Code: code, Message: sprintf(format, a...), Retryable: retryable}
 }
 
-type CookieOut struct {
-	Name     string `json:"name"`
-	Value    string `json:"value"`
-	Domain   string `json:"domain,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Expires  string `json:"expires,omitempty"`
-	Secure   bool   `json:"secure,omitempty"`
-	HTTPOnly bool   `json:"http_only,omitempty"`
-}
-
 type LoginInput struct {
 	URL             string `json:"url" jsonschema:"Any URL on the site; scheme+host identify the site."`
-	Site            string `json:"site,omitempty" jsonschema:"Driver name (see login_sites). Auto-detected from the URL when omitted."`
+	Site            string `json:"site,omitempty" jsonschema:"Driver name (see site_list). Auto-detected from the URL when omitted."`
 	Reason          string `json:"reason,omitempty" jsonschema:"Why the agent needs access; shown to the human in DingTalk."`
 	ForceRefresh    bool   `json:"force_refresh,omitempty" jsonschema:"Skip the cached session and log in again."`
 	Wait            *bool  `json:"wait,omitempty" jsonschema:"false: return pending immediately after notifying the human. Default true."`
@@ -44,24 +40,76 @@ type LoginWaitInput struct {
 	MaxBlockSeconds int    `json:"max_block_seconds,omitempty"`
 }
 
+// LoginOutput is the state of a session being opened. It says that a session exists, for which site and until when; it
+// carries nothing that could be used to act as the person. The credentials stay in the vault and are used by the request
+// tool, which puts them into each request and removes them from the answer.
 type LoginOutput struct {
-	Status  string `json:"status"` // ok | pending
-	Site    string `json:"site,omitempty"`
-	BaseURL string `json:"base_url,omitempty"`
-	Auth    string `json:"auth,omitempty"` // cookie | bearer | none
-	Cached  bool   `json:"cached,omitempty"`
-	// Redacted is true when the credentials were withheld on purpose: the site's tools (archery_*) use the
-	// session on the agent's behalf.
-	Redacted     bool              `json:"redacted,omitempty"`
-	CookieHeader string            `json:"cookie_header,omitempty"`
-	Cookies      []CookieOut       `json:"cookies,omitempty"`
-	Headers      map[string]string `json:"headers,omitempty"`
-	Tokens       map[string]string `json:"tokens,omitempty"`
-	ExpiresAt    string            `json:"expires_at,omitempty"`
-	LoginID      string            `json:"login_id,omitempty"`
-	WaitingFor   string            `json:"waiting_for,omitempty"`
-	Round        int               `json:"round,omitempty"`
-	NextTool     string            `json:"next_tool,omitempty"`
+	Status     string `json:"status"` // ok | pending
+	Site       string `json:"site,omitempty"`
+	BaseURL    string `json:"base_url,omitempty"`
+	Auth       string `json:"auth,omitempty"` // cookie | bearer | none: how the site authenticates, not with what
+	Cached     bool   `json:"cached,omitempty"`
+	ExpiresAt  string `json:"expires_at,omitempty"`
+	LoginID    string `json:"login_id,omitempty"`
+	WaitingFor string `json:"waiting_for,omitempty"`
+	Round      int    `json:"round,omitempty"`
+	NextTool   string `json:"next_tool,omitempty"`
+}
+
+// RequestInput is what an agent may ask for. There is deliberately no field for a cookie, a token or an
+// authorization header: the gateway puts the session's credentials into the request itself.
+type RequestInput struct {
+	URL              string                `json:"url" jsonschema:"Any URL on the site; scheme+host(+port) identify it. The session for that site is used."`
+	Method           string                `json:"method" jsonschema:"GET, HEAD, POST, PUT, PATCH, DELETE or OPTIONS."`
+	Path             string                `json:"path" jsonschema:"Absolute path on the site, starting with /. No query string and no host: use the query field."`
+	Query            map[string]multiValue `json:"query,omitempty" jsonschema:"Query parameters. Each name maps to a string, or a list of strings for a repeated parameter."`
+	Headers          map[string]string     `json:"headers,omitempty" jsonschema:"Ordinary request headers (Accept, X-Request-Id, ...). Cookie, Authorization, Host and the session's own headers are set by the gateway and refused here."`
+	JSON             json.RawMessage       `json:"json,omitempty" jsonschema:"A JSON request body (any JSON value)."`
+	Form             map[string]multiValue `json:"form,omitempty" jsonschema:"A form-encoded request body. Each name maps to a string, or a list of strings."`
+	Text             string                `json:"text,omitempty" jsonschema:"A plain-text request body."`
+	Base64           string                `json:"base64,omitempty" jsonschema:"A binary request body, standard base64."`
+	FollowRedirects  bool                  `json:"follow_redirects,omitempty" jsonschema:"Follow redirects that stay on the same site. Default false: the redirect is returned."`
+	TimeoutSeconds   int                   `json:"timeout_seconds,omitempty" jsonschema:"Give up after this many seconds (default 25, at most 120)."`
+	MaxResponseBytes int                   `json:"max_response_bytes,omitempty" jsonschema:"Return at most this much of the body (default 262144, at most 1048576)."`
+}
+
+// RequestOutput is the site's answer with every credential removed. It never carries a cookie, a token or a Set-Cookie.
+type RequestOutput struct {
+	Status       int                 `json:"status"`
+	Headers      map[string][]string `json:"headers,omitempty"`
+	Body         string              `json:"body,omitempty"`
+	BodyIsBase64 bool                `json:"body_is_base64,omitempty"`
+	Truncated    bool                `json:"truncated,omitempty"`
+	TotalBytes   int                 `json:"total_bytes,omitempty"`
+	Redactions   int                 `json:"redactions"`
+	Withheld     bool                `json:"withheld,omitempty"`
+	FinalPath    string              `json:"final_path,omitempty"`
+	Hint         string              `json:"hint,omitempty"`
+}
+
+// VaultUnlockInput asks for the vault to be opened by its owner.
+type VaultUnlockInput struct {
+	Reason          string `json:"reason,omitempty" jsonschema:"Why the agent needs the vault open; shown to the person who is asked for the passphrase."`
+	UnlockID        string `json:"unlock_id,omitempty" jsonschema:"The unlock_id of a pending unlock, to keep waiting for it. Leave empty to start one."`
+	MaxBlockSeconds int    `json:"max_block_seconds,omitempty" jsonschema:"Override the default blocking time (1-600)."`
+}
+
+// VaultUnlockOutput is the state of an unlock. It never carries the passphrase or anything derived from it.
+type VaultUnlockOutput struct {
+	Status          string `json:"status"` // unlocked | pending
+	AlreadyUnlocked bool   `json:"already_unlocked,omitempty"`
+	LoginID         string `json:"login_id,omitempty"` // the unlock_id to pass to the next call
+	WaitingFor      string `json:"waiting_for,omitempty"`
+	ExpiresAt       string `json:"expires_at,omitempty"`
+	NextTool        string `json:"next_tool,omitempty"`
+}
+
+// VaultStatusOutput says whether the vault is open and, when unlock attempts are being slowed, for how long.
+type VaultStatusOutput struct {
+	State          string `json:"state"` // not_initialized | locked | unlocked
+	UnlockPending  bool   `json:"unlock_pending,omitempty"`
+	FailedAttempts int    `json:"failed_attempts,omitempty"`
+	RetryAfterSecs int    `json:"retry_after_seconds,omitempty"`
 }
 
 type Empty struct{}
@@ -199,4 +247,66 @@ func fmtTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// multiValue is one value or several: {"q":"a"} and {"q":["a","b"]} both mean what they say. Numbers and booleans are
+// taken as their text, exactly as written (an id of 12345678901234567890 stays that).
+type multiValue []string
+
+func (m *multiValue) UnmarshalJSON(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return err
+	}
+	one := func(x any) (string, error) {
+		switch t := x.(type) {
+		case string:
+			return t, nil
+		case json.Number:
+			return t.String(), nil
+		case bool:
+			return strconv.FormatBool(t), nil
+		}
+		return "", fmt.Errorf("a value must be a string, a number or a boolean")
+	}
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			s, err := one(x)
+			if err != nil {
+				return err
+			}
+			out = append(out, s)
+		}
+		*m = out
+	default:
+		s, err := one(v)
+		if err != nil {
+			return err
+		}
+		*m = multiValue{s}
+	}
+	return nil
+}
+
+// multiValueSchema tells a model what is accepted: a string, a number or a boolean, or a list of those.
+func multiValueSchema() *jsonschema.Schema {
+	scalar := []*jsonschema.Schema{{Type: "string"}, {Type: "number"}, {Type: "boolean"}}
+	return &jsonschema.Schema{AnyOf: append(append([]*jsonschema.Schema{}, scalar...), &jsonschema.Schema{Type: "array", Items: &jsonschema.Schema{AnyOf: scalar}})}
+}
+
+func (m multiValue) values() []string { return []string(m) }
+
+func multiValues(in map[string]multiValue) map[string][]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[k] = v.values()
+	}
+	return out
 }

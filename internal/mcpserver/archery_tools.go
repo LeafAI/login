@@ -16,6 +16,10 @@ import (
 // archeryClient logs in (cached or interactive) and returns an API client. When the login is still
 // pending after max, pending is non-nil.
 func (s *Server) archeryClient(ctx context.Context, req *mcp.CallToolRequest, u ArcheryURL, max time.Duration) (c *archery.Client, pending *LoginOutput, terr *ToolError) {
+	k, terr := s.gate()
+	if terr != nil {
+		return nil, nil, terr
+	}
 	name := u.Site
 	if name == "" {
 		name = "archery"
@@ -29,7 +33,7 @@ func (s *Server) archeryClient(ctx context.Context, req *mcp.CallToolRequest, u 
 	}
 	base, _ := baseOf(u.URL)
 	base = s.root(base)
-	e, ok := s.cache.Get(ctx, base, s.hc)
+	e, ok := k.cache.Get(ctx, base, s.hc)
 	if !ok {
 		return nil, nil, errf("internal", true, "session vanished right after login; retry")
 	}
@@ -48,7 +52,7 @@ func archeryErr(err error) *ToolError {
 		return e
 	case errors.Is(err, archery.ErrSessionInvalid):
 		e := errf("session_expired", true, "%v", err)
-		e.Hint = "Call login with force_refresh=true, then retry."
+		e.Hint = archerySessionHint
 		return e
 	case errors.Is(err, archery.ErrNotFound):
 		return errf("workflow_not_found", false, "%v", err)
@@ -111,6 +115,9 @@ func (s *Server) archeryGroups(ctx context.Context, req *mcp.CallToolRequest, in
 }
 
 func (s *Server) archeryQuery(ctx context.Context, req *mcp.CallToolRequest, in QueryInput) (any, *ToolError) {
+	if _, terr := s.gate(); terr != nil {
+		return nil, terr
+	}
 	if !archery.IsReadOnly(in.SQL) {
 		return nil, errf("invalid_argument", false, "archery_query accepts a single read-only statement; use archery_run_sql for changes")
 	}
@@ -135,18 +142,22 @@ func (s *Server) archeryQuery(ctx context.Context, req *mcp.CallToolRequest, in 
 }
 
 func pendingLogin(p *LoginOutput) ArcheryOut {
-	return ArcheryOut{Outcome: archery.Outcome{Status: "pending", Phase: "login"}, LoginID: p.LoginID, NextTool: "login_wait"}
+	return ArcheryOut{Outcome: archery.Outcome{Status: "pending", Phase: "login"}, LoginID: p.LoginID, NextTool: nextSessionWait}
 }
 
 func finishOutcome(o *archery.Outcome) ArcheryOut {
 	out := ArcheryOut{Outcome: *o}
 	if o.Status == "pending" {
-		out.NextTool = "archery_wait"
+		out.NextTool = nextArcheryWait
 	}
 	return out
 }
 
 func (s *Server) archeryRunSQL(ctx context.Context, req *mcp.CallToolRequest, in RunSQLInput) (any, *ToolError) {
+	k, terr := s.gate()
+	if terr != nil {
+		return nil, terr
+	}
 	if in.Instance == "" || in.Database == "" || in.SQL == "" || in.Title == "" {
 		return nil, errf("invalid_argument", false, "instance, database, sql and title are required")
 	}
@@ -169,7 +180,7 @@ func (s *Server) archeryRunSQL(ctx context.Context, req *mcp.CallToolRequest, in
 		return pendingLogin(pending), nil
 	}
 	backup := in.Backup == nil || *in.Backup
-	sub, err := s.tracker.Submit(ctx, c, s.notify, archery.SubmitRequest{
+	sub, err := k.tracker.Submit(ctx, c, s.notify, archery.SubmitRequest{
 		Instance: in.Instance, Database: in.Database, SQL: in.SQL, Title: in.Title, Remark: in.Remark, Group: group, Backup: backup},
 		time.Duration(in.ApprovalTimeout)*time.Second)
 	if err != nil {
@@ -178,12 +189,12 @@ func (s *Server) archeryRunSQL(ctx context.Context, req *mcp.CallToolRequest, in
 	if in.Wait != nil && !*in.Wait {
 		return finishOutcome(sub), nil
 	}
-	return s.waitWorkflow(ctx, req, c, sub.WorkflowID, max, sub.Check)
+	return s.waitWorkflow(ctx, req, k, c, sub.WorkflowID, max, sub.Check)
 }
 
-func (s *Server) waitWorkflow(ctx context.Context, req *mcp.CallToolRequest, c *archery.Client, id int, max time.Duration, check []archery.CheckRow) (any, *ToolError) {
+func (s *Server) waitWorkflow(ctx context.Context, req *mcp.CallToolRequest, k *core, c *archery.Client, id int, max time.Duration, check []archery.CheckRow) (any, *ToolError) {
 	var n float64
-	out, err := s.tracker.Wait(ctx, c, id, max, func(phase string) {
+	out, err := k.tracker.Wait(ctx, c, id, max, func(phase string) {
 		s.progress(ctx, req, &n, "archery workflow "+itoa(id)+": "+phase)
 	})
 	if err != nil {
@@ -196,6 +207,10 @@ func (s *Server) waitWorkflow(ctx context.Context, req *mcp.CallToolRequest, c *
 }
 
 func (s *Server) archeryWait(ctx context.Context, req *mcp.CallToolRequest, in WaitInput) (any, *ToolError) {
+	k, terr := s.gate()
+	if terr != nil {
+		return nil, terr
+	}
 	max := s.maxBlock(in.MaxBlockSeconds)
 	c, pending, terr := s.archeryClient(ctx, req, in.ArcheryURL, max)
 	if terr != nil {
@@ -204,7 +219,7 @@ func (s *Server) archeryWait(ctx context.Context, req *mcp.CallToolRequest, in W
 	if pending != nil {
 		return pendingLogin(pending), nil
 	}
-	return s.waitWorkflow(ctx, req, c, in.WorkflowID, max, nil)
+	return s.waitWorkflow(ctx, req, k, c, in.WorkflowID, max, nil)
 }
 
 func (s *Server) archeryStatus(ctx context.Context, req *mcp.CallToolRequest, in StatusInput) (any, *ToolError) {

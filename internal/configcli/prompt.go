@@ -1,4 +1,4 @@
-// Package configcli implements `login config`: guided, validated editing of the config file so users never
+// Package configcli implements `securl config`: guided, validated editing of the config file so users never
 // have to hand-write YAML.
 package configcli
 

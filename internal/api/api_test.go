@@ -26,7 +26,7 @@ type env struct {
 
 func setup(t *testing.T) *env {
 	t.Helper()
-	k, err := keyring.NewPool(t.TempDir(), 8, time.Hour).Acquire()
+	k, err := keyring.NewMemoryPool(8, time.Hour).Acquire()
 	if err != nil {
 		t.Fatal(err)
 	}

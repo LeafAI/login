@@ -19,7 +19,7 @@ import (
 //go:embed static/*
 var static embed.FS
 
-// WriteTo writes the static page (index.html, login.js, openpgp.min.js) into dir.
+// WriteTo writes the static page (index.html, securl.js, openpgp.min.js) into dir.
 func WriteTo(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

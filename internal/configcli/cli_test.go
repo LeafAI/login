@@ -25,7 +25,7 @@ type result struct {
 	path     string
 }
 
-// run executes `login config args` with the given typed answers against a fresh (or given) config file.
+// run executes `securl config args` with the given typed answers against a fresh (or given) config file.
 func run(t *testing.T, path, answers string, args ...string) result {
 	t.Helper()
 	if path == "" {

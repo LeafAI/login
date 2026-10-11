@@ -22,5 +22,5 @@ func versionLine() string {
 			}
 		}
 	}
-	return fmt.Sprintf("login %s%s %s %s/%s", mcpserver.Version, rev, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	return fmt.Sprintf("securl %s%s %s %s/%s", mcpserver.Version, rev, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }

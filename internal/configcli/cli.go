@@ -1,6 +1,7 @@
 package configcli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -13,9 +14,10 @@ import (
 	"github.com/LeafAI/securl/internal/mcpserver"
 	"github.com/LeafAI/securl/internal/site"
 	"github.com/LeafAI/securl/internal/site/generic"
+	"github.com/LeafAI/securl/internal/vault"
 )
 
-// Env is everything `login config` needs from its surroundings (injected so it can be tested).
+// Env is everything `securl config` needs from its surroundings (injected so it can be tested).
 type Env struct {
 	Path       string // config file
 	In         io.Reader
@@ -25,9 +27,14 @@ type Env struct {
 	SendTest func(webhook, secret, keyword string, mobiles []string) error
 	// Now is the clock (nil: the real one); tests fix it so that codes are predictable.
 	Now func() time.Time
+	// Vault holds the secrets (the TOTP secrets). Commands that need a secret refuse, with the command that cures it,
+	// while it is not initialized or locked.
+	Vault *vault.Vault
+
+	passReader *bufio.Reader // a plain-line passphrase reader, shared by the prompts of one command
 }
 
-const usage = `usage: login config <command> [-config file]
+const usage = `usage: securl config <command> [-config file]
 
   init                       guided setup: DingTalk robot, then optional advanced settings
   site add [url]             guided setup of one website (driver, path prefix, driver-specific options)
@@ -38,12 +45,12 @@ const usage = `usage: login config <command> [-config file]
   get <key>                  print one setting         (-reveal shows secrets)
   set [key [value]]          change one setting; without arguments lists every setting
   unset <key>                remove a setting (the default applies again)
-  totp init|code|status|on|off  the two TOTP factors that protect the link and the credential (see: login config totp)
+  totp init|code|status|on|off  the two TOTP factors that protect the link and the credential (see: securl config totp)
   path                       print the config file location
 
 Every change is checked before it is saved. The previous file is kept as config.yaml.bak and comments are preserved.`
 
-// Run executes `login config args...` and returns the process exit code.
+// Run executes `securl config args...` and returns the process exit code.
 func Run(args []string, env Env) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "-help" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprintln(env.Out, usage)
@@ -70,7 +77,7 @@ func Run(args []string, env Env) int {
 	case "totp":
 		err = cmdTOTP(env, rest)
 	default:
-		fmt.Fprintf(env.Err, "login config: unknown command %q\n\n%s\n", cmd, usage)
+		fmt.Fprintf(env.Err, "securl config: unknown command %q\n\n%s\n", cmd, usage)
 		return 2
 	}
 	return report(env, err)
@@ -81,18 +88,18 @@ func report(env Env, err error) int {
 	case err == nil:
 		return 0
 	case errors.Is(err, ErrNoInput):
-		fmt.Fprintln(env.Err, "login config: input ended before all questions were answered; run it in a terminal, or use `login config set <key> <value>`")
+		fmt.Fprintln(env.Err, "securl config: input ended before all questions were answered; run it in a terminal, or use `securl config set <key> <value>`")
 	case errors.Is(err, errCancelled):
-		fmt.Fprintln(env.Err, "login config: cancelled, nothing was changed")
+		fmt.Fprintln(env.Err, "securl config: cancelled, nothing was changed")
 	default:
-		fmt.Fprintf(env.Err, "login config: %v\n", err)
+		fmt.Fprintf(env.Err, "securl config: %v\n", err)
 	}
 	return 1
 }
 
 var errCancelled = errors.New("cancelled")
 
-// extractConfigFlag lets -config appear anywhere, so `login config set a b -config x` works.
+// extractConfigFlag lets -config appear anywhere, so `securl config set a b -config x` works.
 func extractConfigFlag(args []string, env *Env) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
@@ -210,7 +217,7 @@ func cmdShow(env Env) error {
 		return err
 	}
 	if !ed.Exists() {
-		fmt.Fprintf(env.Out, "# no config file at %s yet (defaults and environment variables are in effect)\n# run `login config init` to create one\n", env.Path)
+		fmt.Fprintf(env.Out, "# no config file at %s yet (defaults and environment variables are in effect)\n# run `securl config init` to create one\n", env.Path)
 		return nil
 	}
 	b, err := ed.Redacted()
@@ -232,7 +239,7 @@ func cmdGet(env Env, args []string) error {
 		}
 	}
 	if len(keys) != 1 {
-		return errors.New("usage: login config get [-reveal] <key>")
+		return errors.New("usage: securl config get [-reveal] <key>")
 	}
 	ed, err := openEditor(env)
 	if err != nil {
@@ -260,11 +267,11 @@ func cmdSet(env Env, args []string) error {
 	key := args[0]
 	value := strings.Join(args[1:], " ")
 	if len(args) > 1 && configedit.IsSecret(key) {
-		fmt.Fprintf(env.Err, "note: a secret typed on the command line stays in your shell history; next time run `login config set %s` and it is asked without echo\n", key)
+		fmt.Fprintf(env.Err, "note: a secret typed on the command line stays in your shell history; next time run `securl config set %s` and it is asked without echo\n", key)
 	}
 	if len(args) == 1 {
 		if !configedit.IsSecret(key) {
-			return fmt.Errorf("usage: login config set %s <value>", key)
+			return fmt.Errorf("usage: securl config set %s <value>", key)
 		}
 		var err error // secrets are asked for, so they never land in shell history
 		if value, err = prompter(env).Secret(key, false); err != nil {
@@ -290,7 +297,7 @@ func cmdSet(env Env, args []string) error {
 
 func cmdUnset(env Env, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: login config unset <key>")
+		return errors.New("usage: securl config unset <key>")
 	}
 	ed, err := openEditor(env)
 	if err != nil {
@@ -312,9 +319,9 @@ func cmdUnset(env Env, args []string) error {
 }
 
 func listSettings(env Env) {
-	fmt.Fprintln(env.Out, "settings (login config set <key> <value>); lists take comma-separated values, durations look like 30s / 10m / 24h:")
+	fmt.Fprintln(env.Out, "settings (securl config set <key> <value>); lists take comma-separated values, durations look like 30s / 10m / 24h:")
 	for _, s := range configedit.Settings() {
 		fmt.Fprintf(env.Out, "  %-44s %s\n", s.Path, s.Type)
 	}
-	fmt.Fprintln(env.Out, "\nwebsites are easier with `login config site add` and `login config site custom`.")
+	fmt.Fprintln(env.Out, "\nwebsites are easier with `securl config site add` and `securl config site custom`.")
 }

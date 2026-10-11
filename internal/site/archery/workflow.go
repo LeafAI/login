@@ -3,7 +3,6 @@ package archery
 import (
 	"context"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -149,11 +148,6 @@ func toResultRows(rows []reviewRow) []ResultRow {
 	}
 	return out
 }
-
-var ddl = regexp.MustCompile(`(?im)^\s*(create|alter|drop|truncate|rename)\b`)
-
-// HasDDL reports whether any statement looks like DDL.
-func HasDDL(sql string) bool { return ddl.MatchString(sql) }
 
 // workflowURL is the page of a workflow in the Archery web UI (the same in both generations).
 func workflowURL(base *url.URL, workflowID int) string {

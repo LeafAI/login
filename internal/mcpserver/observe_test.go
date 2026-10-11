@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/LeafAI/securl/internal/flow"
 	"github.com/LeafAI/securl/internal/site/archery"
 	"github.com/LeafAI/securl/internal/totp"
+	"github.com/LeafAI/securl/internal/vault"
 )
 
 func events(t *testing.T, path string) []audit.Event {
@@ -45,11 +47,12 @@ func newTestServer(t *testing.T, tweak func(*config.Config)) (*Server, *config.C
 	dir := t.TempDir()
 	cfg, _ := config.Load(dir + "/none.yaml")
 	cfg.Keys.Dir = dir + "/keys"
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	cfg.Audit.File = filepath.Join(dir, "audit.jsonl")
 	if tweak != nil {
 		tweak(cfg)
 	}
-	_, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}})
+	_, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +165,7 @@ func testConfig(t *testing.T, dir string) *config.Config {
 		t.Fatal(err)
 	}
 	cfg.Keys.Dir = dir + "/keys"
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	cfg.Audit.File = filepath.Join(dir, "audit.jsonl")
 	return cfg
 }
@@ -177,45 +181,51 @@ func TestAuditClipsAgentControlledReason(t *testing.T) {
 
 // ---- the two TOTP factors at start-up ----
 
-func writeSecret(t *testing.T, path string) {
+// putSecret stores a fresh TOTP secret in the vault under a factor's entry.
+func putSecret(t *testing.T, v *vault.Vault, entry string) {
 	t.Helper()
-	s, err := totp.NewSecret()
+	sec, err := totp.NewSecret()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := totp.SaveSecret(path, s); err != nil {
+	if err := v.Put(entry, []byte(totp.FormatSecret(sec))); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func newWith(t *testing.T, tweak func(*config.Config)) error {
+// newWith starts a server with an open vault, after tweak has changed the config and put secrets in the vault.
+func newWith(t *testing.T, tweak func(*config.Config, *vault.Vault)) error {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := testConfig(t, dir)
-	tweak(cfg)
-	_, _, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}})
+	v := testVault(t, cfg)
+	tweak(cfg, v)
+	_, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}, Vault: v})
+	if s != nil {
+		t.Cleanup(s.Close)
+	}
 	return err
 }
 
-// A factor that is on without a usable secret stops the server from starting. Carrying on would hand out plain links
-// to people who switched the protection on.
-func TestServerRefusesToStartWithAFactorOnAndNoSecret(t *testing.T) {
-	for name, tweak := range map[string]func(*config.Config){
-		"unlock":  func(c *config.Config) { c.Security.LinkTOTP.Enabled = true },
-		"sealing": func(c *config.Config) { c.Security.SealTOTP.Enabled = true },
+// A factor that is on without a usable secret stops the server from opening. Carrying on would hand out plain links
+// to people who switched the protection on. (The vault opens only with the passphrase now, so this is checked then.)
+func TestServerRefusesToOpenWithAFactorOnAndNoSecret(t *testing.T) {
+	for name, tweak := range map[string]func(*config.Config, *vault.Vault){
+		"unlock":  func(c *config.Config, _ *vault.Vault) { c.Security.LinkTOTP.Enabled = true },
+		"sealing": func(c *config.Config, _ *vault.Vault) { c.Security.SealTOTP.Enabled = true },
 	} {
 		err := newWith(t, tweak)
 		if err == nil || !strings.Contains(err.Error(), "totp init") {
-			t.Errorf("%s: the server started with a factor on and no secret (err=%v)", name, err)
+			t.Errorf("%s: the server opened with a factor on and no secret (err=%v)", name, err)
 		}
 	}
 }
 
-func TestServerStartsWithTheFactorsAndTheSecretsPresent(t *testing.T) {
-	err := newWith(t, func(c *config.Config) {
+func TestServerOpensWithTheFactorsAndTheSecretsPresent(t *testing.T) {
+	err := newWith(t, func(c *config.Config, v *vault.Vault) {
 		c.Security.LinkTOTP.Enabled, c.Security.SealTOTP.Enabled = true, true
-		writeSecret(t, c.Security.LinkTOTP.SecretFile)
-		writeSecret(t, c.Security.SealTOTP.SecretFile)
+		putSecret(t, v, config.LinkSecretName)
+		putSecret(t, v, config.SealSecretName)
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -223,23 +233,25 @@ func TestServerStartsWithTheFactorsAndTheSecretsPresent(t *testing.T) {
 }
 
 func TestServerRefusesAnInvalidFactorSetting(t *testing.T) {
-	err := newWith(t, func(c *config.Config) {
-		c.Security.SealTOTP = config.TOTP{Enabled: true, Period: 5 * time.Second, Digits: 8, SecretFile: c.Security.SealTOTP.SecretFile}
-		writeSecret(t, c.Security.SealTOTP.SecretFile)
+	err := newWith(t, func(c *config.Config, v *vault.Vault) {
+		c.Security.SealTOTP = config.TOTP{Enabled: true, Period: 5 * time.Second, Digits: 8}
+		putSecret(t, v, config.SealSecretName)
 	})
 	if err == nil {
 		t.Fatal("a 5 second period was accepted")
 	}
 }
 
-// The policy resource tells the agent which protections are on, without ever exposing a code or a secret path.
+// The policy resource tells the agent which protections are on, without ever exposing a code or a secret.
 func TestPolicyReportsTheFactorsWithoutSecrets(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(t, dir)
 	cfg.Security.LinkTOTP.Enabled, cfg.Security.SealTOTP.Enabled = true, true
-	writeSecret(t, cfg.Security.LinkTOTP.SecretFile)
-	writeSecret(t, cfg.Security.SealTOTP.SecretFile)
-	_, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}})
+	v := testVault(t, cfg)
+	putSecret(t, v, config.LinkSecretName)
+	putSecret(t, v, config.SealSecretName)
+	link, _ := v.Get(config.LinkSecretName)
+	_, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}, Vault: v})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,9 +260,25 @@ func TestPolicyReportsTheFactorsWithoutSecrets(t *testing.T) {
 		t.Errorf("the policy must report both factors: %+v", pol)
 	}
 	raw, _ := json.Marshal(pol)
-	for _, leak := range []string{cfg.Security.LinkTOTP.SecretFile, cfg.Security.SealTOTP.SecretFile, "link.secret", "seal.secret"} {
+	for _, leak := range []string{string(link), "link.secret", "seal.secret", config.LinkSecretName} {
 		if strings.Contains(string(raw), leak) {
 			t.Errorf("the policy leaks %q: %s", leak, raw)
+		}
+	}
+}
+
+func TestPolicyReportsLocalAddressAccess(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		cfg := testConfig(t, t.TempDir())
+		cfg.Security.AllowLocalAddresses = allow
+		_, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(s.policy())
+		want := fmt.Sprintf(`"local_addresses_allowed":%v`, allow)
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the policy must tell the agent whether local addresses are reachable (%s): %s", want, raw)
 		}
 	}
 }

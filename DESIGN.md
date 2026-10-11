@@ -1,11 +1,11 @@
-# login — MCP server for human-assisted website login
+# securl — MCP server for human-assisted authenticated requests
 
 Status: **implemented (stdio MCP server)**; later stages are tracked in `docs/ROADMAP.md`. Module: `github.com/LeafAI/securl`.
-Install: `go install github.com/LeafAI/securl@latest` (binary `login`, `main.go` at repo root).
+Install: `go install github.com/LeafAI/securl@latest` (binary `securl`, `main.go` at repo root).
 
 ## 1. Goal
 
-An AI agent calls the MCP tool `login(url)`. The server gets a human to type the
+An AI agent calls the MCP tool `session_open(url)`. The server gets a human to type the
 credential on a web page reached through an SSH reverse tunnel, logs in to the
 target site with its real login flow, and returns the cookie/token to the agent.
 The agent never sees the password. Sites are pluggable; phase 1 ships skywalking,
@@ -14,7 +14,7 @@ kibana, kubesphere, nightingale, archery, gitlab.
 ## 2. End-to-end flow
 
 ```
-Agent ──login(url)──▶ MCP server (stdio)
+Agent ──session_open(url)──▶ MCP server (stdio)
   0. cache hit & still valid? ──yes──▶ return cached session
   1. resolve site driver from URL (host match / explicit `site` arg)
   2. take a GPG key from the pool (each key: <= 8 uses and <= 24 h, then retired)
@@ -44,10 +44,10 @@ listener closes. TTL (default 10 min) closes it too.
 ```
 main.go                      # package main: flags/config, wire everything, serve MCP on stdio
 internal/
-  mcpserver/                 # tool registration (login, login_sessions, logout, archery_*), resources, audit hooks
+  mcpserver/                 # tool registration (session_*, site_list, vault_*, archery_*), resources, audit hooks
   audit/                     # append-only JSON-lines activity log (metadata only)
   ratelimit/                 # per-site / overall request limits and the cool-down after a Reject
-  configedit/ configcli/     # `login config`: validated, comment-preserving edits and the guided wizards
+  configedit/ configcli/     # `securl config`: validated, comment-preserving edits and the guided wizards
   keyring/                   # GPG key pool (≤8), generate/reuse, armored export, decrypt
   api/                       # one-shot JSON API behind the tunnel: /submit, /status per round (no HTML)
   web/                       # static login.html + vendored openpgp.min.js (go:embed; see 4.3)
@@ -57,7 +57,7 @@ internal/
     gitlab/ kibana/ kubesphere/ nightingale/ archery/ skywalking/
     generic/                 # declarative form/JSON login driven by YAML (any other site)
   session/                   # cache, singleflight per host, validity probe
-  config/                    # ~/.config/login/config.yaml + env overrides
+  config/                    # ~/.config/securl/config.yaml + env overrides
 ```
 
 Dependencies: `modelcontextprotocol/go-sdk` (MCP), `ProtonMail/go-crypto/openpgp`
@@ -68,13 +68,12 @@ Dependencies: `modelcontextprotocol/go-sdk` (MCP), `ProtonMail/go-crypto/openpgp
 ## 4. Key components
 
 ### 4.1 Key pool (`keyring`)
-- Dir `~/.config/login/keys/` (0700), one armored private key per file plus a small metadata
-  record `{created_at, uses}`; private key mode 0600, no passphrase (it only protects short-lived
-  transport; see section 8).
+- Keys live **in memory only** (`MemoryPool`); nothing is written to disk, so there is no private key for the vault to
+  not protect. Locking the vault, or ending the process, forgets them. (An earlier version kept them in `keys/`;
+  `securl vault init` / `securl vault migrate` remove those files.)
 - A key pair may be used **at most 8 times and for at most 24 h**, whichever comes first
-  (`max_uses: 8`, `max_age: 24h`, configurable). `Acquire()` returns a live key with the fewest
-  remaining uses and increments `uses` atomically (file lock, safe across processes), or generates a
-  new one when none is live. Retired keys are deleted on the next acquire.
+  (`max_uses: 8`, `max_age: 24h`, configurable). `Acquire()` returns the live key and counts the use, or generates a
+  new one when it has run out. Every process has its own pool.
 - Key type: Curve25519 (ed25519 + cv25519). The armored public key is ~400 bytes, practical to
   fit in a link fragment (RSA keys are 2-4x longer).
 
@@ -122,7 +121,7 @@ A tunnel serves exactly one login and nothing of it may outlive that login.
   none does the login fails with `tunnel_unavailable`. The audit log records the provider that carried the link and
   how many tunnels it took (`tunnel` event, `attempts`).
 - **Closed at the end, however it ends.** Success, a refusal by the site, wrong password, Reject, timeout, cancel
-  (`logout`), notification failure and server shutdown all close it. When a page is waiting it stays only until the
+  (`session_close`), notification failure and server shutdown all close it. When a page is waiting it stays only until the
   page has read the final state, plus a short flush delay (`FlushDelay`, 3 s) so that the answer is delivered; if the
   page never reads it, `OutcomeCap` (10 s) closes it.
 - **The whole process tree.** The tunnel runs in its own process group and closing it kills the group, so a wrapper
@@ -170,7 +169,7 @@ code, which is why what the blob hides is useless without the GPG private key th
 layers add depth and bind data to its round; they do not replace OpenPGP and do not defend against malware on the person's
 machine.
 
-Both secrets are 160-bit random values kept in separate 0600 files; `login config totp init` creates them, refuses to
+Both secrets are 160-bit random values kept in separate 0600 files; `securl config totp init` creates them, refuses to
 replace an existing one (that would lock people out) and prints each as a secret and an `otpauth://` URI. If a factor is on
 and its secret is missing or readable by others, the server does not start.
 
@@ -185,7 +184,7 @@ the human receives, not something the API tells the page.
 
 Round link (sent in DingTalk, clicked by the human):
 ```
-https://leafai.github.io/login/#v=1&site=gitlab.corp.example&mode=totp&round=2
+https://leafai.github.io/securl/#v=1&site=gitlab.corp.example&mode=totp&round=2
   &u=<urlenc https://x.pinggy.link/<token>>&k=<base64url binary OpenPGP public key>&f=<fingerprint>
 ```
 - Parameters live in the **fragment (`#`), not the query (`?`)**: fragments are never sent to any
@@ -200,7 +199,7 @@ https://leafai.github.io/login/#v=1&site=gitlab.corp.example&mode=totp&round=2
 Static page (`web/login.html`, single file with vendored `openpgp.js`, no external requests):
 - Primary: the version-pinned copy published from this repo to GitHub Pages (built in CI from the
   tagged source, embedded `openpgp.js` included). Fallbacks: a self-hosted copy via `web.page_url`,
-  or `login page` writing the embedded copy to disk to open locally with a "paste link" box.
+  or `securl page` writing the embedded copy to disk to open locally with a "paste link" box.
 - Parses the fragment; shows site, mode, API host and key fingerprint for the human to check, and
   clears the fragment from the address bar (`history.replaceState`) after reading it.
 - Renders the form for the mode from a **built-in whitelist**: `login` = username+password,
@@ -263,21 +262,23 @@ Phase-1 flows (to be verified against real instances during implementation):
 | KubeSphere | POST `/oauth/token` (password grant) → `access_token`/`refresh_token`; also v4 `/login` cookie path. Return bearer header |
 | Nightingale (v7) | POST `/api/n9e/auth/login` → `access_token`/`refresh_token`; return bearer header |
 | Archery | GET `/login/` for `csrftoken`, POST `/authenticate/` (+2FA if enabled). Collect `sessionid`, `csrftoken` |
-| SkyWalking | No login needed today → `noauth` driver: `login` probes the URL, returns an empty session with `auth: none`, never prompts. `generic` can add basic/form auth later |
+| SkyWalking | No login needed today → `noauth` driver: `session_open` probes the URL, returns an empty session with `auth: none`, never prompts. `generic` can add basic/form auth later |
 
 ### 4.6 Sessions (`session`)
-In-memory cache keyed by `scheme://host`, TTL from driver; on `login` call, run `Probe` first and
+In-memory cache keyed by `scheme://host`, TTL from driver; on a `session_open` call, run `Probe` first and
 only prompt the human if invalid (avoids DingTalk spam). `singleflight` per host so parallel agent
-calls trigger one prompt. Optional `persist: true` stores sessions encrypted to the pool key on disk.
+calls trigger one prompt. Sessions are stored in the vault (`session/<base>` entries), so a new process reuses them
+once the vault is open; the cache is dropped whenever the vault locks.
 `force_refresh` arg bypasses cache.
 
 ## 5. MCP tools
 
 | Tool | Input | Output |
 |---|---|---|
-| `login` | `url`, `site?`, `force_refresh?`, `timeout_s?` | `{site, cookies[], cookie_header, headers, tokens, expires_at}` |
-| `login_sessions` | – | cached hosts + expiry (no secrets) |
-| `logout` | `url` | drops cache |
+| `session_open` | `url`, `site?`, `force_refresh?`, `timeout_s?` | `{site, auth, cached, expires_at}`: no credential |
+| `request` | `url`, `method`, `path`, `query?`, `headers?`, body | `{status, headers, body, redactions, ...}`: credentials put in and taken out |
+| `session_list` | – | cached hosts + expiry (no secrets) |
+| `session_close` | `url` | drops cache |
 | `archery_query` | `url`, `instance`, `db`, `sql`, `limit` | rows (read-only query endpoint, no approval) |
 | `archery_run_sql` | `url`, `instance`, `db`, `sql`, `remark`, `wait_timeout_s?` | execution result (sync) |
 | `archery_workflow_status` / `archery_wait` | `workflow_id` | status / continue waiting & execute |
@@ -286,7 +287,7 @@ Long-running calls emit MCP progress notifications (“waiting for human login�
 
 ### Archery async approval → sync SQL
 `archery_run_sql` does:
-1. `login` (cached or prompted).
+1. `session_open` (cached or prompted).
 2. `POST /simplecheck/` / `/sql/check/` — syntax and auto-review; abort on level-2 errors.
 3. `POST /autoreview/` to submit the workflow → `workflow_id`.
 4. DingTalk message to the human/approvers with workflow link and SQL summary (reuses `notify`).
@@ -307,11 +308,11 @@ Besides tools the server exposes three read-only resources and sends instruction
 
 | URI | Content |
 |---|---|
-| `login://sites` | supported sites (same data as `login_sites`) |
-| `login://sessions` | which sites are logged in; never the cookies or tokens |
-| `login://policy` | allowed hosts, blocking time, request limits, DDL switch, audit on/off; no secrets |
+| `securl://sites` | supported sites (same data as `site_list`) |
+| `securl://sessions` | which sites are logged in; never the cookies or tokens |
+| `securl://policy` | allowed hosts, blocking time, request limits, DDL switch, audit on/off; no secrets |
 
-The instructions tell the agent the call pattern (`login` -> `login_wait`), how to react to each error code
+The instructions tell the agent the call pattern (`session_open` -> `session_wait`), how to react to each error code
 (`user_rejected`, `rate_limited`, `host_not_allowed`, `session_expired`) and that cookies are secrets. Every
 tool carries a title and a generated output schema; results are validated against them in the tests.
 
@@ -328,7 +329,7 @@ tool carries a title and a generated output schema; results are validated agains
   10-minute pause for a site after the person pressed Reject. A refused request returns `rate_limited`
   (retryable, with a hint not to loop) and sends no message.
 
-### 5.3 `login config`
+### 5.3 `securl config`
 
 Editing YAML by hand is easy to get wrong, so the CLI does it: `init` (DingTalk and safety), `site add`
 (driver detection, path prefix and the driver's own options), `site custom` (describe any login form by
@@ -339,8 +340,8 @@ and key order in the user's file survive. Secrets are asked without echo and mas
 
 ## 6. Configuration
 
-`~/.config/login/config.yaml`, env overrides `LOGIN_DINGTALK_WEBHOOK`, `LOGIN_DINGTALK_SECRET`,
-`LOGIN_TUNNEL_ORDER`. Sections: `dingtalk`, `tunnel`, `keys`, `web`, `mcp`, `sessions`, `security`, `audit`, `limits`, `site_options`, `aliases`, `roots`, `sites`, `archery`. `login config` edits them.
+`~/.config/securl/config.yaml`, env overrides `SECURL_DINGTALK_WEBHOOK`, `SECURL_DINGTALK_SECRET`,
+`SECURL_TUNNEL_ORDER`. Sections: `dingtalk`, `tunnel`, `keys`, `web`, `mcp`, `sessions`, `security`, `audit`, `limits`, `site_options`, `aliases`, `roots`, `sites`, `archery`. `securl config` edits them.
 MCP registration: `claude mcp add login -- login`.
 
 ## 7. Testing
@@ -364,10 +365,10 @@ MCP registration: `claude mcp add login -- login`.
 - **Residual trust:** the static page's origin (GitHub Pages for this repo, pinned to a release
   path; a compromised repo/release would compromise users) and DingTalk delivering the link
   unmodified. For stricter setups, self-host the page (`web.page_url`) or use the local copy from
-  `login page`.
+  `securl page`.
 - Private key stays local, 0600; plaintext password zeroed after use, never logged; MCP responses
-  contain only cookies/tokens. Replay protection via nonce+ts+round; token compared constant-time.
-- Returned cookies are secrets handed to the agent by design; `login_sessions` never prints them.
+  contain no credential. Replay protection via nonce+ts+round; token compared constant-time.
+- No tool result carries a cookie, token or authorization header: `request` injects them and scrubs the answer.
 - SSH host keys: `accept-new` trust-on-first-use.
 
 ## 9. Milestones

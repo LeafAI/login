@@ -35,10 +35,10 @@ func TestRecordAppendsJSONLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.Record(Event{Event: "tool_call", Tool: "login", Host: "gitlab.corp.example", Result: "ok", Cached: true})
+	l.Record(Event{Event: "tool_call", Tool: "session_open", Host: "gitlab.corp.example", Result: "ok", Cached: true})
 	l.Record(Event{Event: "human_request", Site: "gitlab", Reason: "deploy check"})
 	got := lines(t, p)
-	if len(got) != 2 || got[0].Tool != "login" || !got[0].Cached || got[1].Reason != "deploy check" || got[0].Time == "" {
+	if len(got) != 2 || got[0].Tool != "session_open" || !got[0].Cached || got[1].Reason != "deploy check" || got[0].Time == "" {
 		t.Fatalf("events = %+v", got)
 	}
 	if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
@@ -96,7 +96,7 @@ func TestConcurrentRecordsStayWholeLines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			l.Record(Event{Event: "tool_call", Tool: "login", Reason: strings.Repeat("x", 500)})
+			l.Record(Event{Event: "tool_call", Tool: "session_open", Reason: strings.Repeat("x", 500)})
 		}()
 	}
 	wg.Wait()

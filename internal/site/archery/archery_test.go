@@ -3,6 +3,7 @@ package archery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -295,5 +296,102 @@ func TestInspectTellsTheGenerations(t *testing.T) {
 	u, _ := url.Parse(other.URL)
 	if _, err := (driver{}).Inspect(context.Background(), u, other.Client()); err == nil {
 		t.Error("a non-Archery server was accepted")
+	}
+}
+
+type failingNotifier struct{}
+
+func (failingNotifier) Markdown(context.Context, string, string) error {
+	return fmt.Errorf(`Post "https://oapi.dingtalk.com/robot/send?access_token=TOK123&sign=SIG&timestamp=17": refused`)
+}
+
+func TestSubmitNotifyFailureDoesNotLeakWebhookSecrets(t *testing.T) {
+	bothGenerations(t, func(t *testing.T, legacy bool, newFake func() *archerytest.Fake) {
+		c, _ := setup(t, newFake(), okCreds)
+		tr := NewTracker(true, time.Minute)
+		sub, err := tr.Submit(context.Background(), c, failingNotifier{}, submitReq("UPDATE t SET a=1"), 0)
+		if err != nil || !strings.Contains(sub.Reason, "refused") {
+			t.Fatalf("submit: %+v %v", sub, err)
+		}
+		for _, bad := range []string{"TOK123", "sign=", "access_token", "timestamp="} {
+			if strings.Contains(sub.Reason, bad) {
+				t.Errorf("reason leaks %q: %s", bad, sub.Reason)
+			}
+		}
+	})
+}
+
+func approvalMessage(t *testing.T, sql string) string {
+	t.Helper()
+	var msg string
+	bothGenerations(t, func(t *testing.T, legacy bool, newFake func() *archerytest.Fake) {
+		c, _ := setup(t, newFake(), okCreds)
+		n := &recNotifier{}
+		if _, err := NewTracker(true, time.Minute).Submit(context.Background(), c, n, submitReq(sql), 0); err != nil || len(n.msgs) != 1 {
+			t.Fatalf("submit: %v %v", err, n.msgs)
+		}
+		msg = n.msgs[0]
+	})
+	return msg
+}
+
+func TestApprovalMessageSaysWhenTheSQLWasCut(t *testing.T) {
+	long := "UPDATE t SET a=1 WHERE id IN (" + strings.Repeat("1,", 400) + "1)"
+	msg := approvalMessage(t, long)
+	if !strings.Contains(msg, "truncated") || !strings.Contains(msg, fmt.Sprintf("%d characters", len(long))) {
+		t.Errorf("a cut SQL must be flagged with its full length:\n%s", msg)
+	}
+	if !strings.Contains(msg, "sha256") {
+		t.Errorf("the approver needs a fingerprint to match the statement in Archery:\n%s", msg)
+	}
+	if !strings.Contains(msg, "Archery") {
+		t.Errorf("the message should point to the full text in Archery:\n%s", msg)
+	}
+}
+
+func TestApprovalMessageLeavesShortSQLAlone(t *testing.T) {
+	msg := approvalMessage(t, "UPDATE t SET a=1")
+	if strings.Contains(msg, "truncated") {
+		t.Errorf("a short SQL is shown whole and must not be flagged:\n%s", msg)
+	}
+	if !strings.Contains(msg, "sha256") {
+		t.Errorf("the fingerprint is useful for any SQL:\n%s", msg)
+	}
+}
+
+func TestApprovalMessageCountsRunesNotBytes(t *testing.T) {
+	sql := "UPDATE t SET a='" + strings.Repeat("数", 300) + "'"
+	msg := approvalMessage(t, sql)
+	if strings.Contains(msg, "truncated") {
+		t.Errorf("%d runes fit in the limit; flagging by byte count is wrong:\n%s", len([]rune(sql)), msg)
+	}
+}
+
+func sqlOfRunes(n int) string {
+	const prefix = "UPDATE t SET a='"
+	return prefix + strings.Repeat("x", n-len([]rune(prefix))-1) + "'"
+}
+
+func TestApprovalMessageTruncationBoundary(t *testing.T) {
+	if got := len([]rune(sqlOfRunes(500))); got != 500 {
+		t.Fatalf("helper is wrong: %d", got)
+	}
+	if msg := approvalMessage(t, sqlOfRunes(500)); strings.Contains(msg, "truncated") {
+		t.Errorf("exactly 500 characters are shown whole and must not be flagged:\n%s", msg)
+	}
+	msg := approvalMessage(t, sqlOfRunes(501))
+	if !strings.Contains(msg, "truncated") || !strings.Contains(msg, "501 characters") || !strings.Contains(msg, "first 500 ") {
+		t.Errorf("501 characters must be flagged with the real numbers:\n%s", msg)
+	}
+}
+
+func TestApprovalMessageShowsExactlyTheAnnouncedPreview(t *testing.T) {
+	sql := sqlOfRunes(900)
+	msg := approvalMessage(t, sql)
+	block := msg[strings.Index(msg, "```sql\n")+len("```sql\n"):]
+	block = block[:strings.Index(block, "\n```")]
+	shown := strings.TrimSuffix(block, "...")
+	if got := len([]rune(shown)); got != 500 {
+		t.Errorf("the message says the first 500 characters are shown, but %d are", got)
 	}
 }

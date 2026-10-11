@@ -40,7 +40,7 @@ func newRigWithFactor(t *testing.T, mode string, fields []web.Field, f api.Facto
 func newRigFull(t *testing.T, mode string, fields []web.Field, f api.Factor, linkCodes []string, linkDigits int) *rig {
 	t.Helper()
 	browsertest.Require(t)
-	k, err := keyring.NewPool(t.TempDir(), 8, time.Hour).Acquire()
+	k, err := keyring.NewMemoryPool(8, time.Hour).Acquire()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestBrowserSealsWithAVeryLongSiteName(t *testing.T) {
 	if len(long) <= web.MaxSiteLen {
 		t.Fatalf("test setup: the name must be longer than %d, got %d", web.MaxSiteLen, len(long))
 	}
-	k, err := keyring.NewPool(t.TempDir(), 8, time.Hour).Acquire()
+	k, err := keyring.NewMemoryPool(8, time.Hour).Acquire()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,5 +594,71 @@ func TestBrowserDerivesTheSameLinkKeysAsGo(t *testing.T) {
 	if res.Derived.LinkStretched != seal.VectorLinkStretched || res.Derived.LinkSlotKey != seal.VectorLinkSlotKey {
 		t.Fatalf("the page derived different link keys than Go:\n got stretched %s\nwant stretched %s\n got slot key %s\nwant slot key %s",
 			res.Derived.LinkStretched, seal.VectorLinkStretched, res.Derived.LinkSlotKey, seal.VectorLinkSlotKey)
+	}
+}
+
+// The vault step has its own fixed form: one passphrase field whose label the page chooses. The link names the step and
+// nothing else; it carries no field list, so a forged link cannot put its own wording above the most sensitive input.
+func TestBrowserVaultStepShowsItsOwnFixedForm(t *testing.T) {
+	r := newRig(t, "vault", nil)
+	res := browsertest.Drive(t, r.dir, r.frag, "probe", "", "")
+	if res.MainHidden {
+		t.Fatalf("the vault step must render: %+v", res)
+	}
+	if !strings.Contains(res.Title, "Unlock the vault") {
+		t.Errorf("the page says what it is for: %q", res.Title)
+	}
+	if strings.Contains(res.Title, "Additional information") {
+		t.Errorf("the vault step is not a generic custom form: %q", res.Title)
+	}
+	if len(res.FieldLabels) != 1 || res.FieldLabels[0] != "Vault passphrase" {
+		t.Errorf("the form has exactly one field, labelled by the page: %v", res.FieldLabels)
+	}
+}
+
+func TestBrowserVaultStepSubmitsThePassphraseSealed(t *testing.T) {
+	r := newRig(t, "vault", nil)
+	_, sub, err := r.drive(r.frag, "submit", `{"passphrase":"correct horse battery staple"}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Fields["passphrase"] != "correct horse battery staple" || sub.Mode != "vault" {
+		t.Errorf("%+v", sub)
+	}
+}
+
+// A link cannot choose the wording: a field list in a vault link is refused outright, not shown.
+func TestBrowserVaultStepRefusesALinkThatCarriesItsOwnFields(t *testing.T) {
+	r := newRig(t, "vault", nil)
+	raw := `[{"name":"passphrase","label":"Your bank PIN, to confirm a payment","secret":true}]`
+	frag := r.mutate(func(v url.Values) { v.Set("fields", browsertestB64([]byte(raw))) })
+	res := browsertest.Drive(t, r.dir, frag, "refuse", "", "")
+	if !res.MainHidden || strings.TrimSpace(res.Msg) == "" {
+		t.Errorf("a vault link with its own field list must be refused: %+v", res)
+	}
+}
+
+func TestBrowserVaultStepTitleIsNotTakenFromTheSiteName(t *testing.T) {
+	r := newRig(t, "vault", nil)
+	frag := r.mutate(func(v url.Values) { v.Set("site", "Enter your card number here") })
+	res := browsertest.Drive(t, r.dir, frag, "probe", "", "")
+	if strings.Contains(res.Title, "card number") || strings.Contains(res.BodyText, "card number") {
+		t.Errorf("the vault page must not echo link-supplied wording: %q / %q", res.Title, res.BodyText)
+	}
+	if !strings.Contains(res.BodyText, "Vault passphrase") {
+		t.Errorf("and it still shows its own: %q", res.BodyText)
+	}
+}
+
+// What is typed into the vault step is the most valuable value login ever sees: it is hidden while typed, and no password
+// manager may fill it (it would file the vault passphrase under the origin of the hosted page) or offer to save it.
+func TestBrowserVaultPassphraseIsHiddenAndNotOfferedToPasswordManagers(t *testing.T) {
+	r := newRig(t, "vault", nil)
+	res := browsertest.Drive(t, r.dir, r.frag, "probe", "", "")
+	if len(res.FieldTypes) != 1 || res.FieldTypes[0] != "password" {
+		t.Errorf("the passphrase field must hide what is typed: %v", res.FieldTypes)
+	}
+	if len(res.Autocomplete) != 1 || res.Autocomplete[0] != "off" {
+		t.Errorf("a password manager must not be invited to fill or save it: %v", res.Autocomplete)
 	}
 }

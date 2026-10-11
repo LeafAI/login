@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/LeafAI/securl/internal/audit"
 	"github.com/LeafAI/securl/internal/notify"
 )
 
@@ -151,11 +153,11 @@ func (t *Tracker) Submit(ctx context.Context, c *Client, n Notifier, r SubmitReq
 	out := &Outcome{Status: "pending", Phase: PhaseAwaitingApproval, WorkflowID: sub.WorkflowID, AuditID: sub.AuditID,
 		WorkflowURL: workflowURL(c.Base, sub.WorkflowID), Check: rows}
 	if n != nil {
-		text := fmt.Sprintf("### SQL approval needed: %s\n\n- **Instance / DB**: %s / %s\n- **Requested by AI agent**: %s\n\n```sql\n%s\n```\n\n[Open workflow #%d in Archery](%s)\n\nAfter approval the SQL is executed automatically.",
+		text := fmt.Sprintf("### SQL approval needed: %s\n\n- **Instance / DB**: %s / %s\n- **Requested by AI agent**: %s\n\n```sql\n%s\n```\n%s\n[Open workflow #%d in Archery](%s)\n\nAfter approval the SQL is executed automatically.",
 			notify.Escape(r.Title, 50), notify.Escape(r.Instance, 80), notify.Escape(r.Database, 80), orNone(notify.Escape(r.Remark, 200)),
-			notify.CodeBlock(r.SQL, 500), sub.WorkflowID, out.WorkflowURL)
+			notify.CodeBlock(r.SQL, sqlPreviewRunes), sqlNote(r.SQL), sub.WorkflowID, out.WorkflowURL)
 		if err := n.Markdown(ctx, "SQL approval: "+notify.Escape(r.Title, 50), text); err != nil {
-			out.Reason = "workflow submitted but the DingTalk notification failed: " + err.Error()
+			out.Reason = "workflow submitted but the DingTalk notification failed: " + notify.Redact(err.Error())
 		}
 	}
 	return out, nil
@@ -261,4 +263,19 @@ func (t *Tracker) describeAbort(ctx context.Context, c *Client, id int, out *Out
 			out.Reason = "the approver rejected the workflow"
 		}
 	}
+}
+
+// sqlPreviewRunes is how much of the SQL the approval message shows.
+const sqlPreviewRunes = 500
+
+// sqlNote tells the approver what the preview does not: whether it is cut, and a fingerprint they can
+// match against the statement shown in Archery. A statement that hides its tail from the person who
+// approves it must at least say so.
+func sqlNote(sql string) string {
+	_, sum := audit.Fingerprint(sql)
+	n := utf8.RuneCountInString(sql)
+	if n > sqlPreviewRunes {
+		return fmt.Sprintf("\n**The SQL above is truncated: it has %d characters and only the first %d are shown. Read the full statement in Archery before approving.** (sha256 %s)\n", n, sqlPreviewRunes, sum)
+	}
+	return fmt.Sprintf("\n(sha256 %s)\n", sum)
 }

@@ -53,7 +53,7 @@ func (f fakeTunnels) Start(context.Context, int) (Tunnel, error) {
 }
 
 func manager(t *testing.T, n Notifier, ts TunnelStarter, ttl time.Duration) *Manager {
-	return NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: n, Tunnels: ts,
+	return NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: n, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: ttl, Grace: time.Millisecond})
 }
 
@@ -274,7 +274,7 @@ func (c *countingNotifier) Markdown(context.Context, string, string) error {
 
 func TestAdmitRefusalNeverBothersAHuman(t *testing.T) {
 	n := &countingNotifier{}
-	cfg := Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: n, Tunnels: fakeTunnels{},
+	cfg := Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: n, Tunnels: fakeTunnels{},
 		PageURL: "https://page.example/", TTL: time.Second, Grace: time.Millisecond,
 		Admit: func(site.Driver, *url.URL, string) error { return errors.New("too many requests") }}
 	m := NewManager(cfg)
@@ -300,7 +300,7 @@ func TestAdmitRefusalNeverBothersAHuman(t *testing.T) {
 
 func TestAdmitIsAskedOncePerNewFlowNotPerJoiner(t *testing.T) {
 	asked := 0
-	cfg := Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{},
+	cfg := Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{},
 		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond,
 		Admit: func(site.Driver, *url.URL, string) error { asked++; return nil }}
 	m := NewManager(cfg)
@@ -318,7 +318,7 @@ func TestOnRoundReportsEachRoundOnceEvenAfterATunnelRestart(t *testing.T) {
 	rec := &recNotifier{}
 	var mu sync.Mutex
 	var got []string
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: ts,
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond,
 		OnRound: func(f *Flow, mode string, round int) {
 			mu.Lock()
@@ -424,7 +424,7 @@ func TestEveryEndOfALoginClosesItsTunnel(t *testing.T) {
 			if ttl == 0 {
 				ttl = time.Minute
 			}
-			m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: okNotifier{err: c.notify}, Tunnels: ts,
+			m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{err: c.notify}, Tunnels: ts,
 				PageURL: "https://page.example/", TTL: ttl, Grace: time.Hour, OutcomeCap: 250 * time.Millisecond})
 			u, _ := url.Parse("https://site.example")
 			f := m.Start(c.driver, u, "", http.DefaultClient, nil)
@@ -453,7 +453,7 @@ type Driver = site.Driver
 // a short cap closes it anyway. Neither may wait for the old 30 s grace.
 func TestTunnelClosesRightAfterThePageReadsTheOutcome(t *testing.T) {
 	ts := &trackedTunnels{}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: okNotifier{}, Tunnels: ts,
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Hour, OutcomeCap: time.Hour, FlushDelay: 50 * time.Millisecond})
 	u, _ := url.Parse("https://site.example")
 	f := m.Start(afterRoundDriver{}, u, "", http.DefaultClient, nil)
@@ -472,7 +472,7 @@ func TestTunnelClosesRightAfterThePageReadsTheOutcome(t *testing.T) {
 
 func TestTunnelClosesAtTheCapWhenNobodyReadsTheOutcome(t *testing.T) {
 	ts := &trackedTunnels{}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: okNotifier{}, Tunnels: ts,
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Hour, OutcomeCap: 200 * time.Millisecond})
 	u, _ := url.Parse("https://site.example")
 	f := m.Start(afterRoundDriver{}, u, "", http.DefaultClient, nil)
@@ -541,7 +541,7 @@ func (r *reachTunnels) close() {
 }
 
 func reachManager(t *testing.T, ts TunnelStarter, n Notifier) *Manager {
-	return NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: n, Tunnels: ts,
+	return NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: n, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: time.Minute, OutcomeCap: 200 * time.Millisecond, ProbeTimeout: 2 * time.Second})
 }
 
@@ -641,7 +641,7 @@ func TestTheTunnelThatCarriedTheLinkIsReported(t *testing.T) {
 	var mu sync.Mutex
 	var got []report
 	rec := &recNotifier{}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: nt,
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: nt,
 		PageURL: "https://page.example/", TTL: time.Minute, ProbeTimeout: 2 * time.Second,
 		OnTunnel: func(_ *Flow, p string, n int) { mu.Lock(); got = append(got, report{p, n}); mu.Unlock() }})
 	defer m.Close()
@@ -660,7 +660,7 @@ func TestTheTunnelThatCarriedTheLinkIsReported(t *testing.T) {
 // although the login succeeded. So reading the final state starts a short delay (FlushDelay), it does not close.
 func TestTheFinalAnswerIsDeliveredBeforeTheTunnelCloses(t *testing.T) {
 	ts := &trackedTunnels{}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: okNotifier{}, Tunnels: ts,
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Hour, OutcomeCap: time.Hour, FlushDelay: 400 * time.Millisecond})
 	u, _ := url.Parse("https://site.example")
 	f := m.Start(afterRoundDriver{}, u, "", http.DefaultClient, nil)
@@ -718,7 +718,7 @@ func TestTheDingTalkLinkIsEncryptedWithTheUnlockFactor(t *testing.T) {
 	ts := &trackedTunnels{}
 	rec := &recNotifier{}
 	unlock := &codeSource{codes: []string{"11111111", "22222222"}, digits: 8}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: ts,
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: 10 * time.Minute, Unlock: unlock})
 	defer m.Close()
 	u, _ := url.Parse("https://gitlab.corp.example")
@@ -769,7 +769,7 @@ func TestWithoutTheUnlockFactorTheLinkIsPlain(t *testing.T) {
 func TestTheSealingFactorIsRequiredAndAnnounced(t *testing.T) {
 	rec := &recNotifier{}
 	seal := &codeSource{codes: []string{"123456"}, digits: 6}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: &trackedTunnels{},
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: &trackedTunnels{},
 		PageURL: "https://page.example/", TTL: time.Minute, Seal: seal})
 	defer m.Close()
 	u, _ := url.Parse("https://site.example")
@@ -792,7 +792,7 @@ func TestTheSealingFactorIsRequiredAndAnnounced(t *testing.T) {
 func TestAnUnusableUnlockFactorSendsNoLink(t *testing.T) {
 	rec := &recNotifier{}
 	ts := &trackedTunnels{}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: ts,
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: ts,
 		PageURL: "https://page.example/", TTL: time.Minute, Unlock: &codeSource{codes: nil, digits: 8}})
 	defer m.Close()
 	u, _ := url.Parse("https://site.example")
@@ -816,7 +816,7 @@ func TestBothFactorsTogether(t *testing.T) {
 	rec := &recNotifier{}
 	unlock := &codeSource{codes: []string{"11111111"}, digits: 8}
 	seal := &codeSource{codes: []string{"222222"}, digits: 6}
-	m := NewManager(Config{Keys: keyring.NewPool(t.TempDir(), 8, time.Hour), Notifier: rec, Tunnels: &trackedTunnels{},
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: &trackedTunnels{},
 		PageURL: "https://page.example/", TTL: time.Minute, Unlock: unlock, Seal: seal})
 	defer m.Close()
 	u, _ := url.Parse("https://site.example")
@@ -825,5 +825,108 @@ func TestBothFactorsTogether(t *testing.T) {
 	frag, _ := url.ParseQuery(linkOf(rec.all()[0])[strings.Index(linkOf(rec.all()[0]), "#")+1:])
 	if frag.Get("c") != "8" || frag.Get("t") != "6" {
 		t.Errorf("c=%q t=%q, want the unlock length 8 and the sealing length 6", frag.Get("c"), frag.Get("t"))
+	}
+}
+
+func TestNotifyFailureDoesNotCarryWebhookSecrets(t *testing.T) {
+	leaky := fmt.Errorf(`Post "https://oapi.dingtalk.com/robot/send?access_token=TOK123&sign=SIG&timestamp=17": refused`)
+	r := run(t, manager(t, okNotifier{err: leaky}, fakeTunnels{}, time.Second))
+	if !errors.Is(r.Err, ErrNotify) {
+		t.Fatalf("err = %v", r.Err)
+	}
+	for _, bad := range []string{"TOK123", "sign=", "access_token", "timestamp="} {
+		if strings.Contains(r.Err.Error(), bad) {
+			t.Errorf("flow error leaks %q: %v", bad, r.Err)
+		}
+	}
+	if !strings.Contains(r.Err.Error(), "refused") {
+		t.Errorf("the cause must stay visible: %v", r.Err)
+	}
+}
+
+// A flow can say what it is for, so that the message a person receives names the real request. The vault unlock is not
+// a login to a site, and "Login request: vault" would send people looking for the wrong thing.
+func TestPurposeChangesTheTitleAndTheWordingOfTheMessage(t *testing.T) {
+	rec := &titledNotifier{}
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: fakeTunnels{}, PageURL: "https://page.example/",
+		TTL: time.Second, Log: func(string, ...any) {},
+		Purpose: &Purpose{Title: "Vault unlock", Heading: "Unlock the vault", Step: "vault passphrase", Warning: "Only type it if you asked for this."}})
+	u, _ := url.Parse("https://vault.invalid")
+	f := m.Start(askOnce{}, u, "the agent needs a credential", http.DefaultClient, nil)
+	<-f.Done()
+	if len(rec.titles) == 0 || !strings.Contains(rec.titles[0], "Vault unlock") || strings.Contains(rec.titles[0], "Login request") {
+		t.Errorf("title: %v", rec.titles)
+	}
+	text := rec.msgs[0]
+	for _, want := range []string{"Unlock the vault", "vault passphrase", "Only type it if you asked for this."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the message lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "username & password") || strings.Contains(text, "### Login request") {
+		t.Errorf("login wording must not leak into an unlock message:\n%s", text)
+	}
+}
+
+func TestWithoutAPurposeTheMessageIsTheLoginRequestItAlwaysWas(t *testing.T) {
+	rec := &titledNotifier{}
+	m := NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: rec, Tunnels: fakeTunnels{}, PageURL: "https://page.example/",
+		TTL: time.Second, Log: func(string, ...any) {}})
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(askOnce{}, u, "r", http.DefaultClient, nil)
+	<-f.Done()
+	if !strings.Contains(rec.titles[0], "Login request: site.example") || !strings.Contains(rec.msgs[0], "### Login request: site.example") {
+		t.Errorf("%v\n%s", rec.titles, rec.msgs[0])
+	}
+}
+
+// titledNotifier records title and text of every message.
+type titledNotifier struct {
+	mu     sync.Mutex
+	titles []string
+	msgs   []string
+}
+
+func (r *titledNotifier) Markdown(_ context.Context, title, text string) error {
+	r.mu.Lock()
+	r.titles, r.msgs = append(r.titles, title), append(r.msgs, text)
+	r.mu.Unlock()
+	return nil
+}
+
+// askOnce asks one custom round with a single secret field.
+type askOnce struct{}
+
+func (askOnce) Name() string        { return "askonce" }
+func (askOnce) NeedsLogin() bool    { return true }
+func (askOnce) Match(*url.URL) bool { return false }
+func (askOnce) Login(ctx context.Context, _ *url.URL, ask site.Asker, _ *http.Client) (*site.Session, error) {
+	_, err := ask.Ask(ctx, "custom", []site.Field{{Name: "passphrase", Label: "Vault passphrase", Secret: true}})
+	return nil, err
+}
+func (askOnce) Probe(context.Context, *url.URL, *site.Session, *http.Client) error { return nil }
+
+func TestRunningFindsTheLiveFlowOfASite(t *testing.T) {
+	m := manager(t, okNotifier{}, fakeTunnels{}, time.Minute)
+	u, _ := url.Parse("https://site.example")
+	if m.Running(u) != nil {
+		t.Fatal("nothing runs yet")
+	}
+	a := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	if got := m.Running(u); got != a {
+		t.Errorf("a live flow must be found by its site: %v", got)
+	}
+	other, _ := url.Parse("https://other.example")
+	if m.Running(other) != nil {
+		t.Error("another site has no flow")
+	}
+	m.CancelBase("https://site.example")
+	<-a.Done()
+	deadline := time.Now().Add(2 * time.Second)
+	for m.Running(u) != nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if m.Running(u) != nil {
+		t.Error("a finished flow is not running any more")
 	}
 }

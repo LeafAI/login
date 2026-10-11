@@ -60,7 +60,7 @@ func (d *driver) Configure(opts map[string]string) {
 	d.mu.Unlock()
 }
 
-// Options lists the settings `login config` offers for KubeSphere.
+// Options lists the settings `securl config` offers for KubeSphere.
 func (*driver) Options() []site.Option {
 	return []site.Option{
 		{Key: "identity_provider", Label: "Which identity provider do your users log in with?",

@@ -1,6 +1,6 @@
 # Review of the static login page
 
-Scope: `internal/web/static/` — `index.html`, `login.css`, `login.js` and the vendored `openpgp.min.js`
+Scope: `internal/web/static/` — `index.html`, `securl.css`, `securl.js` and the vendored `openpgp.min.js`
 (OpenPGP.js 6.3.2) — plus how the page is built and deployed (`scripts/build-pages.sh`, `.github/workflows/pages.yml`).
 Reviewed by reading every line of the HTML/CSS/JS, then testing each finding in headless Chromium against the real
 round API (`internal/web/*_test.go`).
@@ -27,13 +27,13 @@ anything leaves the browser. The SSH tunnel provider that carries the ciphertext
 | 6 | Medium | **Mixed content.** From an https page an `http:` tunnel address fails obscurely in the browser. | Refused up front with an explanation (still allowed for local-file/http copies of the page). | `TestBrowserHTTPSPageRefusesHTTPTunnel` |
 | 7 | Low | `fetch` followed redirects and used default credentials mode. | `credentials: 'omit'`, `redirect: 'error'`. | covered by flow tests |
 | 8 | Low | The pasted link (key + tunnel address) stayed in the textarea. | Cleared as soon as it is used. | — |
-| 9 | Low | Inline `<style>` forced `style-src 'unsafe-inline'`. | CSS moved to `login.css`; CSP is now `style-src 'self'`. | all browser tests |
+| 9 | Low | Inline `<style>` forced `style-src 'unsafe-inline'`. | CSS moved to `securl.css`; CSP is now `style-src 'self'`. | all browser tests |
 | 10 | Low | The page could be framed by another site. | Refuses to run when framed (a `<meta>` CSP cannot set `frame-ancestors`). | — |
 | 11 | Low | Status polling swallowed network errors for up to 10 minutes. | After 8 consecutive failures it says the connection is lost and that the answer may still have been received. | — |
 | 12 | Low (a11y) | Errors were not announced; the tab title never changed; captcha `alt` was just "captcha"; no visible focus style; no `noscript` text; **white text on the dark-mode accent (#58a6ff) was ≈2.5:1**. | Errors use `role="alert"`; `document.title` is set; descriptive `alt`; `:focus-visible` outlines; `noscript` notice; dark mode uses dark text on the light accent (≈8.9:1), light mode white on #1a5fd0 (≈5.9:1). Ratios computed by hand, not with an audit tool. | `TestBrowserLoginSubmit` (title) |
 | 13 | Info | **Vendored crypto library.** `openpgp.min.js` was 6.1.0 (Jan 2025). | Upgraded to **6.3.2**; the file is byte-identical to the npm release and pinned by SHA-256 in a test (`e19bf4f0…4aa1`). Go↔browser PGP interoperability re-tested. I could not retrieve the release notes, so I cannot say which advisories the intermediate versions fixed. | `TestVendoredOpenPGPIsTheOfficialRelease` + all browser tests |
 | 14 | Info | The page could be indexed; favicon 404. | `noindex,nofollow`, `robots.txt` (`Disallow: /`), inline empty favicon, `.nojekyll`. | `TestPagesSiteMatchesTheEmbeddedPage` |
-| 15 | Info | **Verifiability of the hosted copy.** | `scripts/build-pages.sh` publishes the files byte-for-byte as embedded in the binary plus `SHA256SUMS`; `login page` prints the same sums. | `TestPagesSiteMatchesTheEmbeddedPage` |
+| 15 | Info | **Verifiability of the hosted copy.** | `scripts/build-pages.sh` publishes the files byte-for-byte as embedded in the binary plus `SHA256SUMS`; `securl page` prints the same sums. | `TestPagesSiteMatchesTheEmbeddedPage` |
 
 ## Decisions worth knowing
 
@@ -46,10 +46,10 @@ anything leaves the browser. The SSH tunnel provider that carries the ciphertext
 ## Residual risks (not fixed)
 
 1. **The hosted origin is trusted.** Whoever can push to `master` (or compromise GitHub Pages) can change the page.
-   Mitigations: branch protection on `master`, the published `SHA256SUMS`, and the local copy from `login page`.
+   Mitigations: branch protection on `master`, the published `SHA256SUMS`, and the local copy from `securl page`.
 2. **The verification code only helps if the human compares it.** The checkbox can be ticked blindly.
 3. **Cache skew.** GitHub Pages caches for about 10 minutes, so right after a deploy a browser may combine a new
-   `index.html` with an old `login.js` (or the reverse). Pages change rarely; reload fixes it.
+   `index.html` with an old `securl.js` (or the reverse). Pages change rarely; reload fixes it.
 4. **Clickjacking defence is script-based**, because `frame-ancestors` cannot be set from a `<meta>` tag.
 5. **Dynamic CSP relies on the browser honouring a `<meta>` CSP inserted at runtime.** Chromium does (tested).
    Firefox and Safari were **not tested**; if one ignores it, the page falls back to the static policy, which is no
@@ -64,5 +64,5 @@ anything leaves the browser. The SSH tunnel provider that carries the ciphertext
 ```
 go test -race ./internal/web          # needs Node + Playwright + Chromium for the browser tests
 scripts/build-pages.sh /tmp/site && (cd /tmp/site && sha256sum -c SHA256SUMS)
-login page /tmp/page                  # prints the same sums as the hosted SHA256SUMS
+securl page /tmp/page                  # prints the same sums as the hosted SHA256SUMS
 ```

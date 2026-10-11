@@ -65,6 +65,7 @@ func TestFullStackWithBothTOTPFactors(t *testing.T) {
 	web.WriteTo(dir)
 	cfg, _ := config.Load(dir + "/none.yaml")
 	cfg.Keys.Dir = dir + "/keys"
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	cfg.Web.PageURL = "file://" + dir + "/index.html"
 	cfg.MCP.MaxBlockSeconds = 60
 	cfg.DingTalk = config.DingTalk{Webhook: hook.URL + "/robot/send?access_token=TOKEN"}
@@ -73,13 +74,14 @@ func TestFullStackWithBothTOTPFactors(t *testing.T) {
 	cfg.Security.LinkTOTP.Enabled, cfg.Security.SealTOTP.Enabled = true, true
 	linkSecret, _ := totp.NewSecret()
 	sealSecret, _ := totp.NewSecret()
-	if err := totp.SaveSecret(cfg.Security.LinkTOTP.SecretFile, linkSecret); err != nil {
+	v := testVault(t, cfg)
+	if err := v.Put(config.LinkSecretName, []byte(totp.FormatSecret(linkSecret))); err != nil {
 		t.Fatal(err)
 	}
-	if err := totp.SaveSecret(cfg.Security.SealTOTP.SecretFile, sealSecret); err != nil {
+	if err := v.Put(config.SealSecretName, []byte(totp.FormatSecret(sealSecret))); err != nil {
 		t.Fatal(err)
 	}
-	m, app, err := mcpserver.New(cfg, mcpserver.Options{Log: func(string, ...any) {}})
+	m, app, err := mcpserver.New(cfg, mcpserver.Options{Log: func(string, ...any) {}, Vault: v})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +105,7 @@ func TestFullStackWithBothTOTPFactors(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "login", Arguments: map[string]any{"url": gl.URL, "site": "gitlab", "reason": "two factors"}})
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "session_open", Arguments: map[string]any{"url": gl.URL, "site": "gitlab", "reason": "two factors"}})
 		if err != nil {
 			done <- result{nil, err}
 			return
@@ -158,7 +160,7 @@ func TestFullStackWithBothTOTPFactors(t *testing.T) {
 	}
 	select {
 	case r := <-done:
-		if r.err != nil || r.out["status"] != "ok" || !strings.Contains(fmt.Sprint(r.out["cookie_header"]), "_gitlab_session=sess") {
+		if r.err != nil || r.out["status"] != "ok" || strings.Contains(fmt.Sprint(r.out), "_gitlab_session") {
 			t.Fatalf("login result: %+v %v", r.out, r.err)
 		}
 	case <-time.After(30 * time.Second):

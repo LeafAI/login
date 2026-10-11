@@ -62,6 +62,13 @@ func (c *Cache) Put(u *url.URL, d site.Driver, s *site.Session) {
 
 // Get returns a cached session after probing it; invalid or expired entries are dropped.
 func (c *Cache) Get(ctx context.Context, u *url.URL, hc *http.Client) (*Entry, bool) {
+	return c.GetWithin(ctx, u, hc, 0)
+}
+
+// GetWithin is Get for callers that use a session many times in a row (a proxied request is not a login): a session
+// that was validated less than fresh ago is returned without asking the site again. fresh == 0 always probes. An expired
+// session is never returned, however recently it was validated.
+func (c *Cache) GetWithin(ctx context.Context, u *url.URL, hc *http.Client, fresh time.Duration) (*Entry, bool) {
 	k := Key(u)
 	c.mu.Lock()
 	e := c.m[k]
@@ -76,6 +83,12 @@ func (c *Cache) Get(ctx context.Context, u *url.URL, hc *http.Client) (*Entry, b
 		c.Delete(k)
 		return nil, false
 	}
+	c.mu.Lock()
+	recent := fresh > 0 && time.Since(e.ValidatedAt) < fresh
+	c.mu.Unlock()
+	if recent {
+		return e, true
+	}
 	base, _ := url.Parse(e.Base)
 	if err := e.Driver.Probe(ctx, base, e.Session, hc); err != nil {
 		c.Delete(k)
@@ -85,6 +98,32 @@ func (c *Cache) Get(ctx context.Context, u *url.URL, hc *http.Client) (*Entry, b
 	e.ValidatedAt = time.Now()
 	c.mu.Unlock()
 	return e, true
+}
+
+// Update replaces the credentials of a session that is already cached (the site rotated a cookie during a proxied
+// request) and stores the result. Only the credentials change: the site, the driver and the time of the login stay. It
+// does nothing, and returns false, for a site nobody is logged in to, and for a nil session.
+func (c *Cache) Update(u *url.URL, s *site.Session) bool {
+	if s == nil {
+		return false
+	}
+	k := Key(u)
+	c.mu.Lock()
+	old := c.m[k]
+	c.mu.Unlock()
+	if old == nil {
+		old = c.fromStore(k)
+	}
+	if old == nil {
+		return false
+	}
+	c.mu.Lock()
+	ne := *old // a copy: a reader that already holds the old entry keeps a consistent view
+	ne.Session = s
+	c.m[k] = &ne
+	c.mu.Unlock()
+	c.persist(func(m map[string]record) { m[ne.Base] = toRecord(&ne) })
+	return true
 }
 
 // fromStore adopts a session another process (or an earlier run) stored.

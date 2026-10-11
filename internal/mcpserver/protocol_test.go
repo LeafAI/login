@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func protoServer(t *testing.T) (*mcp.Server, *Server) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := testConfig(t, dir)
-	srv, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}})
+	srv, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +46,16 @@ func TestEveryToolHasTitleAndOutputSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Tools) != 12 {
-		t.Fatalf("%d tools, want 12", len(res.Tools))
+	// The tool set is the product's surface. A rename or an addition shows up here as a change to this list.
+	want := []string{"archery_cancel", "archery_groups", "archery_instances", "archery_query", "archery_run_sql", "archery_wait",
+		"archery_workflow_status", "request", "session_close", "session_list", "session_open", "session_wait", "site_list", "vault_status", "vault_unlock"}
+	var got []string
+	for _, tl := range res.Tools {
+		got = append(got, tl.Name)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("the tool set changed:\n got  %v\n want %v", got, want)
 	}
 	for _, tl := range res.Tools {
 		if tl.Title == "" || tl.Title == tl.Name {
@@ -107,13 +116,13 @@ func TestRealResultsMatchTheirOutputSchemas(t *testing.T) {
 	defer ts.Close()
 	srv, s := protoServer(t)
 	cs := connect(t, s, srv)
-	validate(t, cs, "login_sites", map[string]any{}, false)
-	validate(t, cs, "login_sessions", map[string]any{}, false)
-	validate(t, cs, "login", map[string]any{"url": ts.URL, "site": "skywalking"}, false) // ok with headers/tokens maps
-	validate(t, cs, "logout", map[string]any{"all": true}, false)
+	validate(t, cs, "site_list", map[string]any{}, false)
+	validate(t, cs, "session_list", map[string]any{}, false)
+	validate(t, cs, "session_open", map[string]any{"url": ts.URL, "site": "skywalking"}, false) // ok with headers/tokens maps
+	validate(t, cs, "session_close", map[string]any{"all": true}, false)
 	// a pending login seen through an Archery tool, via the union types
 	for _, v := range []any{
-		ArcheryStatusOrPending{Phase: "login", LoginID: "lg_1", NextTool: "login_wait"},
+		ArcheryStatusOrPending{Phase: "login", LoginID: "lg_1", NextTool: "session_wait"},
 		ArcheryCancelOrPending{CancelOutput: CancelOutput{Status: "aborted"}},
 		pendingLogin(&LoginOutput{LoginID: "lg_1"}),
 		QueryOutput{Login: &LoginOutput{Status: "pending", LoginID: "lg_2"}},
@@ -138,7 +147,7 @@ func TestResourcesExposeSitesSessionsAndPolicyWithoutSecrets(t *testing.T) {
 	cfg.DingTalk.Webhook = "https://oapi.dingtalk.com/robot/send?access_token=SUPERSECRETTOKEN"
 	cfg.DingTalk.Secret = "SECshouldnotleak"
 	cfg.Security.AllowedHosts = []string{"*.corp.example"}
-	srv, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}})
+	srv, s, err := New(cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +164,7 @@ func TestResourcesExposeSitesSessionsAndPolicyWithoutSecrets(t *testing.T) {
 			t.Errorf("resource %s lacks metadata: %+v", r.URI, r)
 		}
 	}
-	for _, u := range []string{"login://sites", "login://sessions", "login://policy"} {
+	for _, u := range []string{"securl://sites", "securl://sessions", "securl://policy"} {
 		if !got[u] {
 			t.Errorf("resource %s not listed (have %v)", u, got)
 		}
@@ -168,13 +177,13 @@ func TestResourcesExposeSitesSessionsAndPolicyWithoutSecrets(t *testing.T) {
 		return r.Contents[0].Text
 	}
 	var pol Policy
-	if err := json.Unmarshal([]byte(read("login://policy")), &pol); err != nil {
+	if err := json.Unmarshal([]byte(read("securl://policy")), &pol); err != nil {
 		t.Fatal(err)
 	}
 	if len(pol.AllowedHosts) != 1 || pol.AllowedHosts[0] != "*.corp.example" || pol.Limits.PerSite != 6 || !pol.DDLAllowed || !pol.AuditEnabled || pol.MaxBlockSeconds != 50 {
 		t.Errorf("policy = %+v", pol)
 	}
-	for _, uri := range []string{"login://policy", "login://sites", "login://sessions"} {
+	for _, uri := range []string{"securl://policy", "securl://sites", "securl://sessions"} {
 		txt := read(uri)
 		for _, leak := range []string{"SUPERSECRETTOKEN", "SECshouldnotleak", "access_token"} {
 			if strings.Contains(txt, leak) {
@@ -182,10 +191,10 @@ func TestResourcesExposeSitesSessionsAndPolicyWithoutSecrets(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(read("login://sites"), "gitlab") {
+	if !strings.Contains(read("securl://sites"), "gitlab") {
 		t.Error("sites resource should list gitlab")
 	}
-	if _, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{URI: "login://nope"}); err == nil {
+	if _, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{URI: "securl://nope"}); err == nil {
 		t.Error("an unknown resource must be an error")
 	}
 }
@@ -194,7 +203,7 @@ func TestServerInstructionsGuideTheAgent(t *testing.T) {
 	srv, s := protoServer(t)
 	cs := connect(t, s, srv)
 	init := cs.InitializeResult()
-	for _, want := range []string{"login_wait", "user_rejected", "rate_limited", "host_not_allowed", "session_expired", "login://policy", "never print"} {
+	for _, want := range []string{"session_wait", "vault_unlock", "user_rejected", "rate_limited", "host_not_allowed", "session_expired", "securl://policy", "never print"} {
 		if !strings.Contains(init.Instructions, want) {
 			t.Errorf("instructions do not mention %q", want)
 		}

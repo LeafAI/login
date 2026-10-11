@@ -69,7 +69,7 @@
 
   <rect x="800" y="188" width="240" height="62" rx="8" fill="#e0e7ff" stroke="#4338ca"/>
   <text x="920" y="214" text-anchor="middle" font-weight="700" fill="#312e81">GitHub Pages (static page)</text>
-  <text x="920" y="232" text-anchor="middle" fill="#312e81">leafai.github.io/login or self-hosted</text>
+  <text x="920" y="232" text-anchor="middle" fill="#312e81">leafai.github.io/securl or self-hosted</text>
 
   <rect x="790" y="292" width="260" height="84" rx="8" fill="#fce7f3" stroke="#be185d"/>
   <text x="920" y="318" text-anchor="middle" font-weight="700" fill="#831843">The person's browser</text>

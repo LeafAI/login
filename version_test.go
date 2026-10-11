@@ -9,10 +9,13 @@ import (
 
 func TestVersionLine(t *testing.T) {
 	got := versionLine()
-	for _, want := range []string{"login ", mcpserver.Version, "go1", "/"} {
+	for _, want := range []string{"securl ", mcpserver.Version, "go1", "/"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("version line %q lacks %q", got, want)
 		}
+	}
+	if strings.HasPrefix(got, "login ") {
+		t.Errorf("the program is called securl: %q", got)
 	}
 	if strings.Contains(got, "\n") {
 		t.Errorf("must be a single line: %q", got)
