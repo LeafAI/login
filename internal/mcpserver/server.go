@@ -14,17 +14,17 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/LeafAI/login/internal/audit"
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/flow"
-	"github.com/LeafAI/login/internal/keyring"
-	"github.com/LeafAI/login/internal/notify"
-	"github.com/LeafAI/login/internal/ratelimit"
-	"github.com/LeafAI/login/internal/session"
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/site/archery"
-	"github.com/LeafAI/login/internal/site/generic"
-	"github.com/LeafAI/login/internal/tunnel"
+	"github.com/LeafAI/securl/internal/audit"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/flow"
+	"github.com/LeafAI/securl/internal/keyring"
+	"github.com/LeafAI/securl/internal/notify"
+	"github.com/LeafAI/securl/internal/ratelimit"
+	"github.com/LeafAI/securl/internal/session"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/site/archery"
+	"github.com/LeafAI/securl/internal/site/generic"
+	"github.com/LeafAI/securl/internal/tunnel"
 )
 
 func sprintf(f string, a ...any) string { return fmt.Sprintf(f, a...) }

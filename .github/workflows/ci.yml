@@ -20,7 +20,7 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
-      - run: go build -ldflags "-X github.com/LeafAI/login/internal/mcpserver.Version=ci" -o /tmp/login . && /tmp/login version
+      - run: go build -ldflags "-X github.com/LeafAI/securl/internal/mcpserver.Version=ci" -o /tmp/login . && /tmp/login version
   image:
     runs-on: ubuntu-latest
     steps:

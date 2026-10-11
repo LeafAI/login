@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 // probeDriver accepts sessions whose first token is "good".

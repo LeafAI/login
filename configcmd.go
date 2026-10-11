@@ -7,9 +7,9 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/configcli"
-	"github.com/LeafAI/login/internal/notify"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/configcli"
+	"github.com/LeafAI/securl/internal/notify"
 )
 
 // runConfig runs `login config ...`: guided, validated editing of the config file.

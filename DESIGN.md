@@ -1,7 +1,7 @@
 # login — MCP server for human-assisted website login
 
-Status: **implemented (stdio MCP server)**; later stages are tracked in `docs/ROADMAP.md`. Module: `github.com/LeafAI/login`.
-Install: `go install github.com/LeafAI/login@latest` (binary `login`, `main.go` at repo root).
+Status: **implemented (stdio MCP server)**; later stages are tracked in `docs/ROADMAP.md`. Module: `github.com/LeafAI/securl`.
+Install: `go install github.com/LeafAI/securl@latest` (binary `login`, `main.go` at repo root).
 
 ## 1. Goal
 

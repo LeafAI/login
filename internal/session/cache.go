@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 type Entry struct {

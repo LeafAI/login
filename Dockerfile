@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath \
-      -ldflags "-s -w -X github.com/LeafAI/login/internal/mcpserver.Version=${VERSION}" \
+      -ldflags "-s -w -X github.com/LeafAI/securl/internal/mcpserver.Version=${VERSION}" \
       -o /out/login .
 
 FROM alpine:3.21

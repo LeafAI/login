@@ -5,7 +5,7 @@ credentials (GitLab, Jenkins, Kibana, KubeSphere, Nightingale v7, Archery, SkyWa
 The agent never sees the password.
 
 ```
-go install github.com/LeafAI/login@latest
+go install github.com/LeafAI/securl@latest
 claude mcp add login -- login          # or add "login" to any MCP client's server list
 ```
 

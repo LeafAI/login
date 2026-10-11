@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/sshtest"
+	"github.com/LeafAI/securl/internal/sshtest"
 )
 
 // TestRealSSHReverseForward checks, against a throwaway sshd, that a tunnel started by the runner

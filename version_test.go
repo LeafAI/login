@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/mcpserver"
 )
 
 func TestVersionLine(t *testing.T) {

@@ -7,12 +7,12 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/site"
-	_ "github.com/LeafAI/login/internal/site/gitlab"
-	_ "github.com/LeafAI/login/internal/site/kubesphere"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/site"
+	_ "github.com/LeafAI/securl/internal/site/gitlab"
+	_ "github.com/LeafAI/securl/internal/site/kubesphere"
 
-	_ "github.com/LeafAI/login/internal/site/noauth"
+	_ "github.com/LeafAI/securl/internal/site/noauth"
 )
 
 func TestAliasSelectsDriver(t *testing.T) {

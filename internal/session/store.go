@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/LeafAI/login/internal/filelock"
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/filelock"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 // Store persists sessions in an AES-256-GCM encrypted file so that a new MCP server process (every

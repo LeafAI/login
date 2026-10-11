@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/LeafAI/login/internal/config"
+	"github.com/LeafAI/securl/internal/config"
 )
 
 var durationType = reflect.TypeOf(time.Duration(0))

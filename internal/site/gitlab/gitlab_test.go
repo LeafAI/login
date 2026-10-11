@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/site/sitetest"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/site/sitetest"
 )
 
 type flavor int

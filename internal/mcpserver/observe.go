@@ -7,10 +7,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/LeafAI/login/internal/audit"
-	"github.com/LeafAI/login/internal/flow"
-	"github.com/LeafAI/login/internal/session"
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/audit"
+	"github.com/LeafAI/securl/internal/flow"
+	"github.com/LeafAI/securl/internal/session"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 // admit decides whether a new login flow may bother a human, and audits the decision.

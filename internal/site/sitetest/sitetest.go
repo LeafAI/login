@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 // Asker answers rounds from a script and records which modes were requested.

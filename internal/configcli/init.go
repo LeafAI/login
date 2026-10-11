@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/LeafAI/login/internal/configedit"
+	"github.com/LeafAI/securl/internal/configedit"
 )
 
 func validWebhook(v string) error {

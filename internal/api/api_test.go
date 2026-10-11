@@ -14,8 +14,8 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 
-	"github.com/LeafAI/login/internal/keyring"
-	"github.com/LeafAI/login/internal/seal"
+	"github.com/LeafAI/securl/internal/keyring"
+	"github.com/LeafAI/securl/internal/seal"
 )
 
 type env struct {

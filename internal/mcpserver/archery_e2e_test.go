@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/site/archery/archerytest"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/site/archery/archerytest"
 )
 
 func forGenerations(t *testing.T, fn func(t *testing.T, legacy bool)) {

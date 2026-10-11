@@ -15,12 +15,12 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/LeafAI/login/internal/browsertest"
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/mcpserver"
-	"github.com/LeafAI/login/internal/sshtest"
-	"github.com/LeafAI/login/internal/totp"
-	"github.com/LeafAI/login/internal/web"
+	"github.com/LeafAI/securl/internal/browsertest"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/sshtest"
+	"github.com/LeafAI/securl/internal/totp"
+	"github.com/LeafAI/securl/internal/web"
 )
 
 // TestFullStackWithBothTOTPFactors runs the whole thing with both factors on: a real sshd tunnel, a DingTalk webhook, the

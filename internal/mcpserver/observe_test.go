@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/audit"
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/flow"
-	"github.com/LeafAI/login/internal/site/archery"
-	"github.com/LeafAI/login/internal/totp"
+	"github.com/LeafAI/securl/internal/audit"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/flow"
+	"github.com/LeafAI/securl/internal/site/archery"
+	"github.com/LeafAI/securl/internal/totp"
 )
 
 func events(t *testing.T, path string) []audit.Event {

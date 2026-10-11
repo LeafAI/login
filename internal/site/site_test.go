@@ -4,8 +4,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/LeafAI/login/internal/site"
-	_ "github.com/LeafAI/login/internal/site/noauth"
+	"github.com/LeafAI/securl/internal/site"
+	_ "github.com/LeafAI/securl/internal/site/noauth"
 )
 
 func TestResolve(t *testing.T) {

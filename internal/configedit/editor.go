@@ -10,9 +10,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/filelock"
-	"github.com/LeafAI/login/internal/site/generic"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/filelock"
+	"github.com/LeafAI/securl/internal/site/generic"
 )
 
 // Editor holds a config file as a YAML node tree. Methods mutate the tree; Save validates and writes it.

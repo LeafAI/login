@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/LeafAI/login/internal/site/generic"
+	"github.com/LeafAI/securl/internal/site/generic"
 )
 
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)

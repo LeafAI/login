@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 // tiny valid 1x1 PNG

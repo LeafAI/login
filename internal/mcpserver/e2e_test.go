@@ -15,16 +15,16 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/LeafAI/login/internal/audit"
-	"github.com/LeafAI/login/internal/browsertest"
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/flow"
-	"github.com/LeafAI/login/internal/mcpserver"
-	"github.com/LeafAI/login/internal/web"
+	"github.com/LeafAI/securl/internal/audit"
+	"github.com/LeafAI/securl/internal/browsertest"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/flow"
+	"github.com/LeafAI/securl/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/web"
 
-	_ "github.com/LeafAI/login/internal/site/archery"
-	_ "github.com/LeafAI/login/internal/site/gitlab"
-	_ "github.com/LeafAI/login/internal/site/noauth"
+	_ "github.com/LeafAI/securl/internal/site/archery"
+	_ "github.com/LeafAI/securl/internal/site/gitlab"
+	_ "github.com/LeafAI/securl/internal/site/noauth"
 )
 
 // fakeGitLab: sign-in form with TOTP 2FA.

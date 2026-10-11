@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/LeafAI/login/internal/seal"
+	"github.com/LeafAI/securl/internal/seal"
 )
 
 //go:embed static/*

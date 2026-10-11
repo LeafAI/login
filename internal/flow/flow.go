@@ -15,11 +15,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeafAI/login/internal/api"
-	"github.com/LeafAI/login/internal/keyring"
-	"github.com/LeafAI/login/internal/notify"
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/web"
+	"github.com/LeafAI/securl/internal/api"
+	"github.com/LeafAI/securl/internal/keyring"
+	"github.com/LeafAI/securl/internal/notify"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/web"
 )
 
 // Errors surfaced to the MCP layer.
