@@ -56,7 +56,7 @@ type Configurable interface {
 }
 
 // Inspector is implemented by drivers that can describe, without any credentials, what they will do against a
-// given server (login method, product generation, challenges). It powers `login doctor -site`.
+// given server (login method, product generation, challenges). It powers `securl doctor -site`.
 type Inspector interface {
 	Inspect(ctx context.Context, base *url.URL, hc *http.Client) ([]string, error)
 }

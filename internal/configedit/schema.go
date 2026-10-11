@@ -1,4 +1,4 @@
-// Package configedit changes the login config file programmatically (for `login config`) without
+// Package configedit changes the securl config file programmatically (for `securl config`) without
 // disturbing what the user wrote: comments and ordering survive, values are type-checked against the
 // config schema, the result is validated before it is saved, and the write is atomic with a backup.
 package configedit
@@ -78,7 +78,7 @@ func resolve(path string) (keys []string, leaf reflect.Type, err error) {
 		switch t.Kind() {
 		case reflect.Struct:
 			if rest == "" {
-				return nil, nil, fmt.Errorf("%q is a section, not a value; one of its keys is needed (see `login config set` help)", path)
+				return nil, nil, fmt.Errorf("%q is a section, not a value; one of its keys is needed (see `securl config set` help)", path)
 			}
 			name, tail, _ := strings.Cut(rest, ".")
 			f, ok := fieldByYAML(t, name)
@@ -98,7 +98,7 @@ func resolve(path string) (keys []string, leaf reflect.Type, err error) {
 			return append(keys, rest), deref(t.Elem()), nil
 		case reflect.Slice:
 			if kindName(t) == "" {
-				return nil, nil, fmt.Errorf("%q is a list of entries; use `login config site add` or edit the file", path)
+				return nil, nil, fmt.Errorf("%q is a list of entries; use `securl config site add` or edit the file", path)
 			}
 			fallthrough
 		default:
@@ -110,7 +110,7 @@ func resolve(path string) (keys []string, leaf reflect.Type, err error) {
 	}
 }
 
-// Settings lists every setting that `login config set` accepts, sorted by path.
+// Settings lists every setting that `securl config set` accepts, sorted by path.
 func Settings() []Setting {
 	var out []Setting
 	var walk func(t reflect.Type, prefix string)
@@ -149,7 +149,7 @@ func suggest(path string) string {
 		}
 	}
 	if len(near) == 0 || len(near) > 8 {
-		return " (run `login config set` without arguments to list the settings)"
+		return " (run `securl config set` without arguments to list the settings)"
 	}
 	return " (did you mean " + strings.Join(near, ", ") + "?)"
 }

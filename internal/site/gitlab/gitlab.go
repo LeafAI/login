@@ -46,7 +46,7 @@ func (d *driver) Configure(opts map[string]string) {
 	d.mu.Unlock()
 }
 
-// Options lists the settings `login config` offers for GitLab.
+// Options lists the settings `securl config` offers for GitLab.
 func (*driver) Options() []site.Option {
 	return []site.Option{
 		{Key: "login_method", Label: "Which accounts do your users sign in with?",

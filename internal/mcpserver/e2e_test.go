@@ -75,6 +75,13 @@ func (r *recorder) Markdown(_ context.Context, title, text string) error {
 	return nil
 }
 
+// all returns every message sent so far.
+func (r *recorder) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.msgs...)
+}
+
 func (r *recorder) wait(t *testing.T, n int) string {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -134,6 +141,7 @@ func setupWith(t *testing.T, tweak func(*config.Config)) *env {
 	}
 	cfg, _ := config.Load(dir + "/nonexistent.yaml")
 	cfg.Keys.Dir = dir + "/keys"
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	cfg.Web.PageURL = "file://" + dir + "/index.html"
 	cfg.Web.TTL = time.Minute
 	cfg.MCP.MaxBlockSeconds = 1
@@ -141,7 +149,7 @@ func setupWith(t *testing.T, tweak func(*config.Config)) *env {
 		tweak(cfg)
 	}
 	rec := &recorder{}
-	srv, _, err := mcpserver.New(cfg, mcpserver.Options{Notifier: rec, Tunnels: localTunnels{}, Log: func(string, ...any) {}})
+	srv, _, err := mcpserver.New(cfg, mcpserver.Options{Notifier: rec, Tunnels: localTunnels{}, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +187,7 @@ func TestLoginTwoRoundsViaBrowser(t *testing.T) {
 	url := e.site.URL + "/projects"
 
 	// 1s block time < the human's time: expect a pending result first.
-	out, isErr := e.call(t, "login", map[string]any{"url": url, "site": "gitlab", "reason": "list merge requests"})
+	out, isErr := e.call(t, "session_open", map[string]any{"url": url, "site": "gitlab", "reason": "list merge requests"})
 	if isErr || out["status"] != "pending" || out["waiting_for"] != "login" {
 		t.Fatalf("first call: %v", out)
 	}
@@ -193,7 +201,7 @@ func TestLoginTwoRoundsViaBrowser(t *testing.T) {
 	if !strings.Contains(r1, "Another step is needed") {
 		t.Fatalf("round 1 page said: %s", r1)
 	}
-	if out, _ := e.call(t, "login_wait", map[string]any{"login_id": id, "max_block_seconds": 1}); out["status"] != "pending" || out["waiting_for"] != "totp" {
+	if out, _ := e.call(t, "session_wait", map[string]any{"login_id": id, "max_block_seconds": 1}); out["status"] != "pending" || out["waiting_for"] != "totp" {
 		// the second round may not be announced yet; wait for it explicitly below
 		t.Logf("after round 1: %v", out)
 	}
@@ -201,10 +209,11 @@ func TestLoginTwoRoundsViaBrowser(t *testing.T) {
 	if !strings.Contains(r2, "Done") {
 		t.Fatalf("round 2 page said: %s", r2)
 	}
-	out, isErr = e.call(t, "login_wait", map[string]any{"login_id": id, "max_block_seconds": 20})
-	if isErr || out["status"] != "ok" || !strings.Contains(out["cookie_header"].(string), "_gitlab_session=sess") || out["auth"] != "cookie" {
+	out, isErr = e.call(t, "session_wait", map[string]any{"login_id": id, "max_block_seconds": 20})
+	if isErr || out["status"] != "ok" || out["auth"] != "cookie" || out["site"] != "gitlab" {
 		t.Fatalf("final: %v", out)
 	}
+	assertNoCredentials(t, out, "_gitlab_session", "sess")
 
 	// The audit trail names both rounds that reached the person (password, then TOTP), not just the first.
 	var rounds []string
@@ -218,27 +227,27 @@ func TestLoginTwoRoundsViaBrowser(t *testing.T) {
 	}
 
 	// Second call reuses the validated session without bothering the human.
-	out, _ = e.call(t, "login", map[string]any{"url": e.site.URL, "site": "gitlab"})
+	out, _ = e.call(t, "session_open", map[string]any{"url": e.site.URL, "site": "gitlab"})
 	if out["status"] != "ok" || out["cached"] != true {
 		t.Fatalf("cached: %v", out)
 	}
-	if s, _ := e.call(t, "login_sessions", nil); len(s["sessions"].([]any)) != 1 || strings.Contains(fmt.Sprint(s), "_gitlab_session") {
+	if s, _ := e.call(t, "session_list", nil); len(s["sessions"].([]any)) != 1 || strings.Contains(fmt.Sprint(s), "_gitlab_session") {
 		t.Errorf("sessions: %v", s)
 	}
-	if o, _ := e.call(t, "logout", map[string]any{"url": e.site.URL}); o["removed"] != float64(1) {
+	if o, _ := e.call(t, "session_close", map[string]any{"url": e.site.URL}); o["removed"] != float64(1) {
 		t.Errorf("logout: %v", o)
 	}
 }
 
 func TestRejectWithReason(t *testing.T) {
 	e := setup(t)
-	out, _ := e.call(t, "login", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
+	out, _ := e.call(t, "session_open", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
 	id := out["login_id"].(string)
 	page := human(t, e.rec.wait(t, 1), e.dir, "reject", "", "I did not request this")
 	if !strings.Contains(page, "Rejected") {
 		t.Fatalf("page said: %s", page)
 	}
-	out, isErr := e.call(t, "login_wait", map[string]any{"login_id": id, "max_block_seconds": 20})
+	out, isErr := e.call(t, "session_wait", map[string]any{"login_id": id, "max_block_seconds": 20})
 	if !isErr || out["code"] != "user_rejected" || !strings.Contains(out["message"].(string), "I did not request this") {
 		t.Fatalf("got %v (isErr=%v)", out, isErr)
 	}
@@ -250,7 +259,7 @@ func TestToolsListAndNoAuthSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "login login_wait login_sites login_sessions logout archery_instances archery_groups archery_query archery_run_sql archery_wait archery_workflow_status archery_cancel"
+	want := "session_open session_wait request site_list session_list session_close vault_status vault_unlock archery_instances archery_groups archery_query archery_run_sql archery_wait archery_workflow_status archery_cancel"
 	var got []string
 	for _, tl := range tools.Tools {
 		got = append(got, tl.Name)
@@ -260,14 +269,14 @@ func TestToolsListAndNoAuthSite(t *testing.T) {
 			t.Errorf("tool %s missing (have %v)", n, got)
 		}
 	}
-	out, isErr := e.call(t, "login", map[string]any{"url": e.site.URL, "site": "skywalking"})
+	out, isErr := e.call(t, "session_open", map[string]any{"url": e.site.URL, "site": "skywalking"})
 	if isErr || out["status"] != "ok" || out["auth"] != "none" {
 		t.Errorf("skywalking: %v", out)
 	}
-	if out, isErr := e.call(t, "login", map[string]any{"url": "nope"}); !isErr || out["code"] != "invalid_argument" {
+	if out, isErr := e.call(t, "session_open", map[string]any{"url": "nope"}); !isErr || out["code"] != "invalid_argument" {
 		t.Errorf("bad url: %v", out)
 	}
-	if out, isErr := e.call(t, "login", map[string]any{"url": "https://unknown.example"}); !isErr || out["code"] != "unsupported_site" {
+	if out, isErr := e.call(t, "session_open", map[string]any{"url": "https://unknown.example"}); !isErr || out["code"] != "unsupported_site" {
 		t.Errorf("unsupported: %v", out)
 	}
 }
@@ -276,13 +285,13 @@ func TestToolsListAndNoAuthSite(t *testing.T) {
 // pestering the person who just said no.
 func TestRejectCooldownEndToEnd(t *testing.T) {
 	e := setupWith(t, func(c *config.Config) { c.Limits.RejectCooldown = time.Hour })
-	out, _ := e.call(t, "login", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
+	out, _ := e.call(t, "session_open", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
 	id := out["login_id"].(string)
 	human(t, e.rec.wait(t, 1), e.dir, "reject", "", "not now")
-	if out, isErr := e.call(t, "login_wait", map[string]any{"login_id": id, "max_block_seconds": 20}); !isErr || out["code"] != "user_rejected" {
+	if out, isErr := e.call(t, "session_wait", map[string]any{"login_id": id, "max_block_seconds": 20}); !isErr || out["code"] != "user_rejected" {
 		t.Fatalf("reject: %v", out)
 	}
-	out, isErr := e.call(t, "login", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
+	out, isErr := e.call(t, "session_open", map[string]any{"url": e.site.URL, "site": "gitlab", "max_block_seconds": 1})
 	if !isErr || out["code"] != "rate_limited" || !strings.Contains(out["message"].(string), "rejected") {
 		t.Fatalf("second request right after a rejection: %v", out)
 	}
@@ -311,4 +320,21 @@ func readAudit(t *testing.T, path string) []audit.Event {
 		out = append(out, ev)
 	}
 	return out
+}
+
+// assertNoCredentials fails if a tool result holds a cookie, a token or a header value, however it is spelled. The names
+// and values of what the site issued are given: they must not appear anywhere in the serialised result.
+func assertNoCredentials(t *testing.T, out map[string]any, secrets ...string) {
+	t.Helper()
+	raw, _ := json.Marshal(out)
+	for _, field := range []string{"cookie_header", "cookies", "headers", "tokens", "redacted", "Authorization", "Set-Cookie"} {
+		if _, has := out[field]; has {
+			t.Errorf("the result has a %q field: it must carry no credential material at all: %s", field, raw)
+		}
+	}
+	for _, secret := range secrets {
+		if strings.Contains(string(raw), secret) {
+			t.Errorf("the result carries %q: %s", secret, raw)
+		}
+	}
 }

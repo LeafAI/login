@@ -8,13 +8,13 @@ package seal
 // They are exported only so that the page's tests can use the same numbers.
 const (
 	VectorStretched = "030a1cf8549879b43fe463afcd69ddb513747665f0e9e74a49a0382a8b9e4981"
-	VectorPlainKey  = "f3686ee82162c77be03ff46b38115673bc9e42e3b8931f5aba01bda84ea08f79"
-	VectorKey       = "c29e9ce049c4e964ac02653a51c3bceaaddafa64690555b06dd5b046c3fdac10"
+	VectorPlainKey  = "4a019600ad637419cc6fc22be003861a1c3d8950000bc7dbd2e99f9324abfd58"
+	VectorKey       = "7c7f82307a84d834822413bfea3a4888858fd0a81f0d4039e361f48d23989e06"
 )
 
 // Vectors for the link layer: code "12345678", context {fingerprint "AB" x 20, login, 1}. Computed by the same
 // independent Python implementation (hashlib.pbkdf2_hmac, hand-written HKDF).
 const (
-	VectorLinkStretched = "309fd754c8d2f77598ac7e274b122ee53ef64e630d279fdcb3175e53b4c77ee5"
-	VectorLinkSlotKey   = "5be9bc5e3f81f50588cbc0a322c203c44d561cd8bf8ad9675c09dd3ca18d51a7"
+	VectorLinkStretched = "87bcd3fda20251f55d5c8e2cba1b0824fe610e0f97287163264fc10f1cad73e7"
+	VectorLinkSlotKey   = "b9bb5b99b57271e8e4acc9d4e1e14cef574072ef9e95adcd63592ca380ca2d16"
 )

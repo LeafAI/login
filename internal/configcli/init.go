@@ -44,7 +44,7 @@ func cmdInit(env Env) error {
 	}
 	cur := func(k string) string { v, _, _ := ed.Get(k); return v }
 
-	p.Say("login setup. Press Enter to keep the value in [brackets]. Nothing is saved until the end.\n")
+	p.Say("securl setup. Press Enter to keep the value in [brackets]. Nothing is saved until the end.\n")
 	p.Say("1) DingTalk robot. A person receives the login link here. Create a custom robot in a DingTalk group")
 	p.Say("   (Group settings > Robots > Add > Custom) and copy its webhook address.")
 	webhook, err := askSecretURL(p, cur("dingtalk.webhook"))
@@ -130,13 +130,13 @@ func finishInit(env Env, p *Prompter, ed *configedit.Editor) error {
 			}
 			if err := env.SendTest(cfg.DingTalk.Webhook, cfg.DingTalk.Secret, cfg.DingTalk.Keyword, cfg.DingTalk.Mobiles); err != nil {
 				p.Say("  ! the test message failed: %v", err)
-				p.Say("  Check the webhook, the signing secret and the keyword, then run `login config init` again.")
+				p.Say("  Check the webhook, the signing secret and the keyword, then run `securl config init` again.")
 			} else {
 				p.Say("  sent; look for it in the group")
 			}
 		}
 	}
-	p.Say("\nNext: add the websites your agents use with `login config site add`,")
-	p.Say("then check everything with `login doctor` and register the server: claude mcp add login -- login")
+	p.Say("\nNext: add the websites your agents use with `securl config site add`,")
+	p.Say("then check everything with `securl doctor` and register the server: claude mcp add login -- login")
 	return nil
 }

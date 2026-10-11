@@ -1,13 +1,15 @@
-// Command login is an MCP server that logs in to frequently used websites (with a human typing
-// the credential through a DingTalk-delivered link) and returns their cookies/tokens to an AI agent.
+// Command securl is an MCP server that sends authenticated HTTP requests to internal websites on behalf of an AI agent.
+// A person types the credential once, through a DingTalk-delivered link; the credentials stay in an encrypted vault, are
+// put into each request here, and are removed from the answer, so the agent never holds a cookie, a token or a password.
 //
 // Usage:
 //
-//	login [-config file]        serve MCP over stdio
-//	login version               print the version
-//	login page [dir]            write the static login page (to open locally instead of GitHub Pages)
-//	login doctor [-tunnel] [-send]  check the setup, try the tunnel providers, send a test DingTalk message
-//	login config <command>      guided, validated editing of the config file (init, site add, set, show, ...)
+//	securl [-config file]        serve MCP over stdio
+//	securl version               print the version
+//	securl page [dir]            write the static login page (to open locally instead of GitHub Pages)
+//	securl doctor [-tunnel] [-send]  check the setup, try the tunnel providers, send a test DingTalk message
+//	securl config <command>      guided, validated editing of the config file (init, site add, set, show, ...)
+//	securl vault <command>       make the vault that holds every secret (init), look at it (status), change its passphrase (passwd)
 package main
 
 import (
@@ -37,7 +39,7 @@ import (
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "page" {
-		dir := "login-page"
+		dir := "securl-page"
 		if len(os.Args) > 2 {
 			dir = os.Args[2]
 		}
@@ -61,6 +63,10 @@ func main() {
 
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		os.Exit(runConfig(os.Args[2:]))
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "vault" {
+		os.Exit(runVault(os.Args[2:]))
 	}
 
 	if len(os.Args) > 1 && os.Args[1] == "doctor" {

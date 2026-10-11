@@ -13,6 +13,7 @@ import (
 
 	"github.com/LeafAI/securl/internal/config"
 	"github.com/LeafAI/securl/internal/flow"
+	"github.com/LeafAI/securl/internal/netguard"
 	"github.com/LeafAI/securl/internal/ratelimit"
 	"github.com/LeafAI/securl/internal/session"
 	"github.com/LeafAI/securl/internal/site"
@@ -35,44 +36,37 @@ func (s *Server) login(ctx context.Context, req *mcp.CallToolRequest, in LoginIn
 	if terr != nil {
 		return nil, terr
 	}
-	return redactForAgent(out), nil
-}
-
-// redactForAgent removes the credentials from a login result when the site is one that has dedicated tools.
-// Archery's tools (archery_*) use the cached session on the agent's behalf, so the agent has no need to hold
-// its cookies, and must not. Every other site is used by the agent directly and keeps its credentials.
-func redactForAgent(out *LoginOutput) *LoginOutput {
-	if out == nil || out.Status != "ok" || out.Site != "archery" {
-		return out
-	}
-	cp := *out
-	cp.CookieHeader, cp.Cookies, cp.Headers, cp.Tokens = "", nil, nil, nil
-	cp.Redacted = true
-	return &cp
+	return out, nil
 }
 
 func (s *Server) loginWait(ctx context.Context, req *mcp.CallToolRequest, in LoginWaitInput) (any, *ToolError) {
-	f := s.mgr.Get(in.LoginID)
+	c, terr := s.gate()
+	if terr != nil {
+		return nil, terr
+	}
+	f := c.mgr.Get(in.LoginID)
 	if f == nil {
-		return nil, errf("invalid_argument", false, "login_id %q not found or expired; call login again", in.LoginID)
+		return nil, errf("invalid_argument", false, "login_id %q not found or expired; call "+toolSessionOpen+" again", in.LoginID)
 	}
 	out, terr := s.await(ctx, req, f, s.maxBlock(in.MaxBlockSeconds))
 	if terr != nil {
 		return nil, terr
 	}
-	return redactForAgent(out), nil
+	return out, nil
 }
 
 // ensureLogin returns a valid session for the site: from cache, or by running a login flow.
 func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw, siteName, reason string, force, wait bool, max time.Duration) (*LoginOutput, *ToolError) {
+	c, terr := s.gate()
+	if terr != nil {
+		return nil, terr
+	}
 	base, terr := baseOf(raw)
 	if terr != nil {
 		return nil, terr
 	}
-	if !s.hostAllowed(base) {
-		e := errf("host_not_allowed", false, "%s is not in security.allowed_hosts", base.Host)
-		e.Hint = "Ask the user to allow this host in the login config; do not try other spellings of it."
-		return nil, e
+	if terr := checkHost(s.cfg, base); terr != nil {
+		return nil, terr
 	}
 	if siteName == "" {
 		siteName = s.alias(base)
@@ -91,19 +85,19 @@ func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw,
 		return &out, nil
 	}
 	if !force {
-		if e, ok := s.cache.Get(ctx, base, s.hc); ok {
+		if e, ok := c.cache.Get(ctx, base, s.hc); ok {
 			out := sessionOutput(e.Site, base, e.Session)
 			out.Cached = true
 			return &out, nil
 		}
 	} else {
-		s.cache.Delete(session.Key(base))
+		c.cache.Delete(session.Key(base))
 	}
-	f := s.mgr.Start(d, base, reason, s.hc, func(f *flow.Flow, r flow.Result) {
+	f := c.mgr.Start(d, base, reason, s.hc, func(f *flow.Flow, r flow.Result) {
 		var rj *flow.RejectedError
 		switch {
 		case r.Err == nil:
-			s.cache.Put(f.Base, d, r.Session)
+			c.cache.Put(f.Base, d, r.Session)
 		case errors.As(r.Err, &rj):
 			s.limiter.Rejected(session.Key(f.Base))
 		}
@@ -164,21 +158,12 @@ func describe(f *flow.Flow) string {
 func pendingOut(f *flow.Flow) *LoginOutput {
 	sn := f.Snapshot()
 	return &LoginOutput{Status: "pending", Site: f.Site, BaseURL: f.Base.String(), LoginID: f.ID,
-		WaitingFor: sn.Mode, Round: sn.Round, ExpiresAt: fmtTime(sn.ExpiresAt), NextTool: "login_wait"}
+		WaitingFor: sn.Mode, Round: sn.Round, ExpiresAt: fmtTime(sn.ExpiresAt), NextTool: nextSessionWait}
 }
 
+// sessionOutput describes a session without any of its credentials.
 func sessionOutput(name string, base *url.URL, sess *site.Session) LoginOutput {
-	out := LoginOutput{Status: "ok", Site: name, BaseURL: base.String(), Headers: sess.Headers, Tokens: sess.Tokens, ExpiresAt: fmtTime(sess.ExpiresAt)}
-	parts := make([]string, 0, len(sess.Cookies))
-	for _, c := range sess.Cookies {
-		parts = append(parts, c.Name+"="+c.Value)
-		co := CookieOut{Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path, Secure: c.Secure, HTTPOnly: c.HttpOnly}
-		if !c.Expires.IsZero() {
-			co.Expires = fmtTime(c.Expires)
-		}
-		out.Cookies = append(out.Cookies, co)
-	}
-	out.CookieHeader = strings.Join(parts, "; ")
+	out := LoginOutput{Status: "ok", Site: name, BaseURL: base.String(), ExpiresAt: fmtTime(sess.ExpiresAt)}
 	switch {
 	case sess.Headers["Authorization"] != "":
 		out.Auth = "bearer"
@@ -205,7 +190,7 @@ func classify(err error) *ToolError {
 		return e
 	case errors.Is(err, flow.ErrHumanTimeout):
 		e := errf("human_timeout", true, "%v", err)
-		e.Hint = "Nobody completed the login page in time. Ask the user to watch DingTalk, then call login again."
+		e.Hint = "Nobody completed the login page in time. Ask the user to watch DingTalk, then call " + toolSessionOpen + " again."
 		return e
 	case errors.Is(err, flow.ErrNotify):
 		return errf("notify_failed", true, "%v", err)
@@ -245,8 +230,12 @@ func (s *Server) sites(_ context.Context, _ *mcp.CallToolRequest, _ Empty) (any,
 }
 
 func (s *Server) sessions(_ context.Context, _ *mcp.CallToolRequest, _ Empty) (any, *ToolError) {
+	c, terr := s.gate()
+	if terr != nil {
+		return nil, terr
+	}
 	out := SessionsOutput{Sessions: []SessionInfo{}}
-	for _, e := range s.cache.List() {
+	for _, e := range c.cache.List() {
 		auth := "cookie"
 		if e.Session.Headers["Authorization"] != "" {
 			auth = "bearer"
@@ -258,11 +247,15 @@ func (s *Server) sessions(_ context.Context, _ *mcp.CallToolRequest, _ Empty) (a
 }
 
 func (s *Server) logout(_ context.Context, _ *mcp.CallToolRequest, in LogoutInput) (any, *ToolError) {
+	c, terr := s.gate()
+	if terr != nil {
+		return nil, terr
+	}
 	switch {
 	case in.All && in.URL != "", !in.All && in.URL == "":
 		return nil, errf("invalid_argument", false, "give exactly one of url or all")
 	case in.All:
-		return LogoutOutput{Removed: s.cache.Clear()}, nil
+		return LogoutOutput{Removed: c.cache.Clear()}, nil
 	}
 	base, terr := baseOf(in.URL)
 	if terr != nil {
@@ -270,10 +263,10 @@ func (s *Server) logout(_ context.Context, _ *mcp.CallToolRequest, in LogoutInpu
 	}
 	base = s.root(base)
 	n := 0
-	if s.cache.Delete(session.Key(base)) {
+	if c.cache.Delete(session.Key(base)) {
 		n++
 	}
-	if s.mgr.CancelBase(session.Key(base)) {
+	if c.mgr.CancelBase(session.Key(base)) {
 		n++
 	}
 	return LogoutOutput{Removed: n}, nil
@@ -299,6 +292,23 @@ func rootOf(cfg *config.Config, base *url.URL) *url.URL {
 		}
 	}
 	return base
+}
+
+// checkHost refuses a base URL the configuration does not allow: a host outside security.allowed_hosts, or
+// one of this machine's own addresses unless security.allow_local_addresses says otherwise. Names are checked
+// here for a clear message; the HTTP client checks the address it actually connects to as well.
+func checkHost(cfg *config.Config, base *url.URL) *ToolError {
+	if !hostAllowedBy(cfg, base) {
+		e := errf("host_not_allowed", false, "%s is not in security.allowed_hosts", base.Host)
+		e.Hint = "Ask the user to allow this host in the securl config; do not try other spellings of it."
+		return e
+	}
+	if !cfg.Security.AllowLocalAddresses && netguard.LocalHost(base.Host) {
+		e := errf("host_not_allowed", false, "%s is a local address; login does not connect to this machine's own addresses unless security.allow_local_addresses is set", base.Host)
+		e.Hint = "Ask the user to set security.allow_local_addresses in the securl config if this is intended; do not try other spellings of the address."
+		return e
+	}
+	return nil
 }
 
 // hostAllowedBy applies security.allowed_hosts (empty means every host is allowed).
@@ -327,8 +337,8 @@ func Resolve(cfg *config.Config, raw, siteName string) (site.Driver, *url.URL, e
 	if terr != nil {
 		return nil, nil, terr
 	}
-	if !hostAllowedBy(cfg, base) {
-		return nil, nil, errf("host_not_allowed", false, "%s is not in security.allowed_hosts", base.Host)
+	if terr := checkHost(cfg, base); terr != nil {
+		return nil, nil, terr
 	}
 	if siteName == "" {
 		siteName = aliasOf(cfg, base)

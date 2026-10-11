@@ -34,7 +34,7 @@ func reload(t *testing.T, p string) *config.Config {
 }
 
 func TestSetKeepsCommentsAndOtherKeys(t *testing.T) {
-	p := write(t, "# my login config\ndingtalk:\n  webhook: https://oapi.dingtalk.com/robot/send?access_token=abc # robot\nmcp: {max_block_seconds: 30}\n")
+	p := write(t, "# my securl config\ndingtalk:\n  webhook: https://oapi.dingtalk.com/robot/send?access_token=abc # robot\nmcp: {max_block_seconds: 30}\n")
 	e, err := Open(p)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestSetKeepsCommentsAndOtherKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(p)
-	for _, want := range []string{"# my login config", "# robot", "max_block_seconds: 30", "SEC123", "max_age: 12h"} {
+	for _, want := range []string{"# my securl config", "# robot", "max_block_seconds: 30", "SEC123", "max_age: 12h"} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("saved file lost %q:\n%s", want, raw)
 		}
@@ -285,5 +285,18 @@ func TestTOTPSettingsAreKnownAndTyped(t *testing.T) {
 	}
 	if err := e.Set("security.link_totp.digits", "eight"); err == nil {
 		t.Error("digits that are not a number were accepted")
+	}
+}
+
+func TestAllowLocalAddressesIsASettableBoolean(t *testing.T) {
+	ed, err := Open(filepath.Join(t.TempDir(), "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ed.Set("security.allow_local_addresses", "true"); err != nil {
+		t.Fatalf("the wizard must be able to set the new key: %v", err)
+	}
+	if err := ed.Set("security.allow_local_addresses", "maybe"); err == nil {
+		t.Error("a non-boolean must be rejected")
 	}
 }

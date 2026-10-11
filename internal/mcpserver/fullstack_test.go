@@ -73,12 +73,13 @@ func TestFullStack(t *testing.T) {
 	web.WriteTo(dir)
 	cfg, _ := config.Load(dir + "/none.yaml")
 	cfg.Keys.Dir = dir + "/keys"
+	cfg.Security.AllowLocalAddresses = true // the fake site runs on this machine
 	cfg.Web.PageURL = "file://" + dir + "/index.html"
 	cfg.MCP.MaxBlockSeconds = 60
 	cfg.DingTalk = config.DingTalk{Webhook: hook.URL + "/robot/send?access_token=TOKEN", Secret: secret}
 	cfg.Tunnel.Order = []string{"mycorp"}
 	cfg.Tunnel.Custom = []config.CustomProvider{{Name: "mycorp", Command: srv.ReverseCommand(remotePort), URL: fmt.Sprintf("http://127.0.0.1:%d", remotePort)}}
-	m, app, err := mcpserver.New(cfg, mcpserver.Options{Log: func(string, ...any) {}})
+	m, app, err := mcpserver.New(cfg, mcpserver.Options{Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestFullStack(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "login", Arguments: map[string]any{"url": gl.URL, "site": "gitlab", "reason": "full stack"}})
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "session_open", Arguments: map[string]any{"url": gl.URL, "site": "gitlab", "reason": "full stack"}})
 		if err != nil {
 			done <- result{nil, err}
 			return
@@ -134,7 +135,7 @@ func TestFullStack(t *testing.T) {
 	}
 	select {
 	case r := <-done:
-		if r.err != nil || r.out["status"] != "ok" || !strings.Contains(fmt.Sprint(r.out["cookie_header"]), "_gitlab_session=sess") {
+		if r.err != nil || r.out["status"] != "ok" || strings.Contains(fmt.Sprint(r.out), "_gitlab_session") {
 			t.Fatalf("login result: %+v %v", r.out, r.err)
 		}
 	case <-time.After(30 * time.Second):

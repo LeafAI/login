@@ -32,6 +32,10 @@ type Event struct {
 	SQLBytes int    `json:"sql_bytes,omitempty"` // size of submitted SQL, never its text
 	SQLHash  string `json:"sql_sha256,omitempty"`
 	Workflow int    `json:"workflow_id,omitempty"`
+	Method   string `json:"method,omitempty"` // request: the HTTP method
+	Path     string `json:"path,omitempty"`   // request: the path, never the query string
+	Status   int    `json:"status,omitempty"` // request: the site's HTTP status
+	Bytes    int    `json:"bytes,omitempty"`  // request: size of the answer the site sent
 }
 
 // Fingerprint returns the length and a short SHA-256 prefix of s, enough to match a statement to the one

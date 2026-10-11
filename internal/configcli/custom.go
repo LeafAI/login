@@ -49,7 +49,7 @@ func siteCustom(env Env) error {
 	if err := commit(env, ed); err != nil {
 		return err
 	}
-	p.Say("\nAgents can now log in to hosts containing %q. Check it with: login doctor -site https://<host>", spec.MatchHost)
+	p.Say("\nAgents can now log in to hosts containing %q. Check it with: securl doctor -site https://<host>", spec.MatchHost)
 	return nil
 }
 

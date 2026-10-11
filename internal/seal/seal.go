@@ -10,18 +10,18 @@
 // used alone. It is stretched and combined with the one-shot password:
 //
 //	stretched = PBKDF2-HMAC-SHA256(code, salt = one-shot password, 200000 iterations, 32 bytes)
-//	key       = HKDF-SHA256(ikm = password || stretched, salt = SHA-256("login/seal/v2"),
-//	                        info = "login/seal/v2|site|mode|round")
+//	key       = HKDF-SHA256(ikm = password || stretched, salt = SHA-256("securl/seal/v2"),
+//	                        info = "securl/seal/v2|site|mode|round")
 //
 // and the format is "v2." + base64url(IV || ciphertext || tag). The two formats have different prefixes, labels and
 // keys, so a seal of one kind never opens as the other and the factor cannot be skipped.
 //
 // The AES key is derived with HKDF-SHA256 from the one-shot password:
 //
-//	salt = SHA-256("login/seal/v1")      info = "login/seal/v1|site|mode|round"
+//	salt = SHA-256("securl/seal/v1")      info = "securl/seal/v1|site|mode|round"
 //
 // and the same context (site, mode, round, nonce) is the GCM additional data, so the context is bound twice.
-// A browser reproduces all of this with WebCrypto (HKDF, AES-GCM); see internal/web/static/login.js.
+// A browser reproduces all of this with WebCrypto (HKDF, AES-GCM); see internal/web/static/securl.js.
 package seal
 
 import (
@@ -53,8 +53,8 @@ const (
 	PasswordSize = 32
 	ivSize       = 12
 	keySize      = 32
-	label        = "login/seal/v1"
-	labelFactor  = "login/seal/v2"
+	label        = "securl/seal/v1"
+	labelFactor  = "securl/seal/v2"
 )
 
 // Context is what a sealed value is bound to.

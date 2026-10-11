@@ -61,8 +61,19 @@ type Tunnel interface {
 	Close()
 }
 
+// Purpose describes what a flow asks the person for, when that is not a login to a site. Without one, a flow is a login
+// request for the site's host, as it always was.
+type Purpose struct {
+	Title   string // the message title, e.g. "Vault unlock"
+	Heading string // the heading of the message, e.g. "Unlock the vault"
+	Step    string // what is typed, e.g. "vault passphrase"
+	Warning string // a closing line telling the person when to ignore the message
+}
+
 type Config struct {
-	Keys     *keyring.Pool
+	// Purpose, when set, replaces the login wording of every message of this manager.
+	Purpose  *Purpose
+	Keys     keyring.Source
 	Notifier Notifier
 	Tunnels  TunnelStarter
 	PageURL  string
@@ -219,6 +230,13 @@ func refused(d site.Driver, base *url.URL, reason string, err error) *Flow {
 		snap: Snapshot{Phase: "done"}, result: Result{Err: err}}
 	close(f.done)
 	return f
+}
+
+// Running returns the flow that is live for a site (nil when there is none).
+func (m *Manager) Running(base *url.URL) *Flow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.byBase[site.Key(base)]
 }
 
 func (m *Manager) Get(id string) *Flow {
@@ -441,8 +459,12 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrFactor, err)
 		}
-		if err := f.m.cfg.Notifier.Markdown(ctx, "Login request: "+f.Base.Host, message(f, mode, f.rounds, link, f.key.Fingerprint(), expires, note, f.m.cfg.Unlock != nil, f.m.cfg.Seal != nil)); err != nil {
-			return fmt.Errorf("%w: %v", ErrNotify, err)
+		title := "Login request: " + f.Base.Host
+		if p := f.purpose(); p != nil {
+			title = p.Title
+		}
+		if err := f.m.cfg.Notifier.Markdown(ctx, title, message(f, mode, f.rounds, link, f.key.Fingerprint(), expires, note, f.m.cfg.Unlock != nil, f.m.cfg.Seal != nil)); err != nil {
+			return fmt.Errorf("%w: %s", ErrNotify, notify.Redact(err.Error()))
 		}
 		return nil
 	}
@@ -547,6 +569,15 @@ func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, n
 	if step == "" {
 		step = mode
 	}
+	heading := "Login request: " + notify.Escape(f.Base.Host, 100)
+	linkText := "Open the login page"
+	closing := "You can also press **Reject** on the page and give a reason. If you did not expect this, ignore it."
+	if p := f.purpose(); p != nil {
+		step, heading, linkText = p.Step, p.Heading, "Open the page"
+		if p.Warning != "" {
+			closing = "You can also press **Reject** on the page. " + p.Warning
+		}
+	}
 	reason := notify.Escape(f.Reason, 200)
 	if reason == "" {
 		reason = "(not given)"
@@ -560,13 +591,20 @@ func message(f *Flow, mode string, n int, link, fpr string, expires time.Time, n
 		groups = append(groups, short[i:i+4])
 	}
 	short = strings.Join(groups, " ")
-	return note + fmt.Sprintf("### Login request: %s\n\n"+
+	return note + fmt.Sprintf("### %s\n\n"+
 		"- **Step %d**: %s\n- **Requested by AI agent**: %s\n- **Expires**: %s\n- **Key code** (compare it with the page): `%s`\n\n"+
 		"%s"+
-		"[Open the login page](%s)\n\n"+
-		"You can also press **Reject** on the page and give a reason. "+
-		"If you did not expect this, ignore it.",
-		notify.Escape(f.Base.Host, 100), n, step, reason, expires.Format("15:04:05"), short, codeNotes(unlockOn, sealOn), link)
+		"[%s](%s)\n\n"+
+		"%s",
+		heading, n, step, reason, expires.Format("15:04:05"), short, codeNotes(unlockOn, sealOn), linkText, link, closing)
+}
+
+// purpose is the manager's Purpose, or nil for an ordinary login (also for a flow that has no manager, as in tests).
+func (f *Flow) purpose() *Purpose {
+	if f.m == nil {
+		return nil
+	}
+	return f.m.cfg.Purpose
 }
 
 // codeNotes tells the person which codes they will be asked for. The codes themselves are never in a message: they are

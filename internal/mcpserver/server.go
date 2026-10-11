@@ -1,4 +1,4 @@
-// Package mcpserver exposes the login tools over MCP.
+// Package mcpserver exposes securl's tools over MCP.
 package mcpserver
 
 import (
@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -18,6 +19,7 @@ import (
 	"github.com/LeafAI/securl/internal/config"
 	"github.com/LeafAI/securl/internal/flow"
 	"github.com/LeafAI/securl/internal/keyring"
+	"github.com/LeafAI/securl/internal/netguard"
 	"github.com/LeafAI/securl/internal/notify"
 	"github.com/LeafAI/securl/internal/ratelimit"
 	"github.com/LeafAI/securl/internal/session"
@@ -25,6 +27,7 @@ import (
 	"github.com/LeafAI/securl/internal/site/archery"
 	"github.com/LeafAI/securl/internal/site/generic"
 	"github.com/LeafAI/securl/internal/tunnel"
+	"github.com/LeafAI/securl/internal/vault"
 )
 
 func sprintf(f string, a ...any) string { return fmt.Sprintf(f, a...) }
@@ -35,18 +38,32 @@ type Options struct {
 	Tunnels  flow.TunnelStarter
 	HTTP     *http.Client
 	Log      func(format string, args ...any)
+	// Vault is the encrypted store of every secret (nil: one is opened at cfg.Vault.Dir). It starts locked.
+	Vault *vault.Vault
 }
 
 type Server struct {
 	cfg     *config.Config
 	hc      *http.Client
-	mgr     *flow.Manager
-	cache   *session.Cache
-	tracker *archery.Tracker
 	notify  flow.Notifier
+	tunnels flow.TunnelStarter
 	log     func(string, ...any)
 	audit   *audit.Log
 	limiter *ratelimit.Limiter
+	vault   *vault.Vault
+
+	mu       sync.Mutex
+	core     *core     // nil while the vault is locked
+	unlocker *unlocker // works while the vault is locked
+}
+
+// core is everything that holds or handles a secret. It exists only while the vault is open: it is built when the
+// vault unlocks and dropped when it locks, so nothing that can use a credential outlives the passphrase.
+type core struct {
+	mgr     *flow.Manager
+	cache   *session.Cache
+	tracker *archery.Tracker
+	keys    *keyring.MemoryPool
 
 	linkTOTP, sealTOTP bool // which TOTP factors are on (reported by the policy resource; never their secrets)
 }
@@ -65,17 +82,11 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	}
 	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log}
 	if s.hc == nil {
-		s.hc = &http.Client{Timeout: 30 * time.Second}
+		s.hc = netguard.New(netguard.Policy{AllowLocal: cfg.Security.AllowLocalAddresses, AllowedHosts: cfg.Security.AllowedHosts})
 	}
 	if s.log == nil {
-		s.log = func(f string, a ...any) { fmt.Fprintf(os.Stderr, "login: "+f+"\n", a...) }
+		s.log = func(f string, a ...any) { fmt.Fprintf(os.Stderr, "securl: "+f+"\n", a...) }
 	}
-	if cfg.Sessions.Persist {
-		s.cache = session.NewPersistent(&session.Store{Dir: cfg.Sessions.Dir})
-	} else {
-		s.cache = session.New()
-	}
-	s.cache.Log = s.log
 	if cfg.Audit.On() {
 		a, err := audit.Open(cfg.Audit.File, s.log)
 		if err != nil {
@@ -96,36 +107,28 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 			return nil, nil, err
 		}
 	}
-	// The factors are loaded before anything else can use them. A factor that is on but whose secret is missing stops
-	// the server: carrying on would hand out plain links to people who switched the protection on.
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, err
 	}
-	linkSrc, sealSrc, err := cfg.Security.Sources()
-	if err != nil {
-		return nil, nil, err
+	s.tunnels = ts
+	s.unlocker = newUnlocker(s)
+	s.vault = opt.Vault
+	if s.vault == nil {
+		s.vault = vault.New(cfg.Vault.Dir)
 	}
-	s.linkTOTP, s.sealTOTP = linkSrc != nil, sealSrc != nil
-	var unlock, sealing flow.CodeSource
-	if linkSrc != nil {
-		unlock = linkSrc
-	}
-	if sealSrc != nil {
-		sealing = sealSrc
-	}
-	s.mgr = flow.NewManager(flow.Config{
-		Keys:     keyring.NewPool(cfg.Keys.Dir, cfg.Keys.MaxUses, cfg.Keys.MaxAge),
-		Notifier: s.notify, Tunnels: ts, PageURL: cfg.Web.PageURL, TTL: cfg.Web.TTL, Log: s.log,
-		Admit: s.admit, OnRound: s.onRound, OnTunnel: s.onTunnel, Unlock: unlock, Seal: sealing,
-	})
-	s.tracker = archery.NewTracker(cfg.Archery.DDLAllowed(), cfg.Archery.WaitTimeout)
-	s.tracker.Poll = cfg.Archery.PollInterval
+	s.vault.SetIdleTimeout(cfg.Vault.IdleLock)
 
-	m := mcp.NewServer(&mcp.Implementation{Name: "login", Title: "Login gateway", Version: Version}, &mcp.ServerOptions{Instructions: instructions})
+	m := mcp.NewServer(&mcp.Implementation{Name: "securl", Title: "Secure URL requestor", Version: Version}, &mcp.ServerOptions{Instructions: instructions})
 	if err := s.register(m); err != nil {
 		return nil, nil, err
 	}
 	s.registerResources(m)
+	// A vault that is already open (a test, or a caller that unlocked it first) is taken up at once.
+	if s.vault.State() == vault.Unlocked {
+		if err := s.openCore(); err != nil {
+			return nil, nil, err
+		}
+	}
 	return m, s, nil
 }
 
@@ -140,13 +143,23 @@ func ApplySiteOptions(cfg *config.Config) error {
 		if !ok {
 			return fmt.Errorf("site_options: driver %q has no options", name)
 		}
+		if err := site.ValidateOptions(name, opts); err != nil {
+			return fmt.Errorf("site_options: %w", err)
+		}
 		c.Configure(opts)
 	}
 	return nil
 }
 
 // Close stops pending logins and their tunnels.
-func (s *Server) Close() { s.mgr.Close() }
+func (s *Server) Close() {
+	s.mu.Lock()
+	c := s.core
+	s.mu.Unlock()
+	if c != nil {
+		c.mgr.Close()
+	}
+}
 
 func (s *Server) register(m *mcp.Server) error {
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true}
@@ -157,20 +170,30 @@ func (s *Server) register(m *mcp.Server) error {
 	destructive := true
 	for _, reg := range []func() error{
 		func() error {
-			return addTool(m, s.observe, spec[LoginOutput]{"login", "Log in to a website",
-				"Log in to a website (gitlab, jenkins, kibana, kubesphere, nightingale, archery, skywalking, or a configured site) and return a valid cookie/token. A human types the credential on a page opened from a DingTalk link; the agent never sees the password. For archery the result carries no credentials (use the archery_* tools). If still pending after max_block_seconds, call login_wait with the returned login_id.", open(false)}, s.login)
+			return addTool(m, s.observe, spec[VaultStatusOutput]{toolVaultStatus, "Vault state", "Say whether the vault that holds every secret is open, and whether wrong passphrases are being slowed down. Needs no unlock and shows nothing secret.", ro}, s.vaultStatus)
 		},
 		func() error {
-			return addTool(m, s.observe, spec[LoginOutput]{"login_wait", "Resume a pending login", "Resume a pending login started by `login`.", open(true)}, s.loginWait)
+			return addTool(m, s.observe, spec[VaultUnlockOutput]{toolVaultUnlock, "Ask the user to unlock the vault", "Open the vault: every other tool refuses while it is locked. The person gets a DingTalk link and types the vault passphrase on that page; you never see it. Returns pending if they have not yet, then call again with the unlock_id. Does nothing and asks nobody when the vault is already open.", open(false)}, s.vaultUnlock)
 		},
 		func() error {
-			return addTool(m, s.observe, spec[SitesOutput]{"login_sites", "List supported websites", "List the websites this server can log in to.", ro}, s.sites)
+			return addTool(m, s.observe, spec[LoginOutput]{toolSessionOpen, "Open a session on a website",
+				"Get a session on a website (gitlab, jenkins, kibana, kubesphere, nightingale, archery, skywalking, or a configured site). A person types the credential once, on a page opened from a DingTalk link; the agent never sees the password. For archery the result carries no credentials (use the archery_* tools). If still pending after max_block_seconds, call " + toolSessionWait + " with the returned login_id.", open(false)}, s.login)
 		},
 		func() error {
-			return addTool(m, s.observe, spec[SessionsOutput]{"login_sessions", "List cached sessions", "List cached login sessions (no secrets).", ro}, s.sessions)
+			return addTool(m, s.observe, spec[LoginOutput]{toolSessionWait, "Wait for a session being opened", "Keep waiting for a session that " + toolSessionOpen + " asked a person for.", open(true)}, s.loginWait)
 		},
 		func() error {
-			return addTool(m, s.observe, spec[LogoutOutput]{"logout", "Forget a session", "Forget the cached session for a URL (or all sessions) and cancel a pending login for it.", nil}, s.logout)
+			return addTool(m, s.observe, spec[RequestOutput]{toolRequest, "Send an authenticated HTTP request",
+				"Send an HTTP request to a site you hold a session for. The gateway puts the session's cookies and tokens into the request and removes them from the answer, so you never see or send a credential: do not put a Cookie or Authorization header in it (refused). Only the site of the session can be reached, by an absolute path; redirects are returned unless follow_redirects is set, and never followed to another site. Needs a session: call " + toolSessionOpen + " first (it asks a person once). A 401 means the session ended: call " + toolSessionOpen + " with force_refresh.", open(false)}, s.request)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[SitesOutput]{toolSiteList, "List supported websites", "List the websites securl can open a session on.", ro}, s.sites)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[SessionsOutput]{toolSessionList, "List sessions", "List the sites that have a session (never the credentials).", ro}, s.sessions)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[LogoutOutput]{toolSessionClose, "Close a session", "Forget the session for a URL (or all sessions) and cancel a session that is still being opened for it.", nil}, s.logout)
 		},
 		func() error {
 			return addTool(m, s.observe, spec[InstancesOutput]{"archery_instances", "List Archery instances", "List Archery instances (and optionally an instance's databases) the user can access.", ro}, s.archeryInstances)
@@ -211,7 +234,13 @@ type spec[Out any] struct {
 // structured success/error results.
 func addTool[In, Out any](m *mcp.Server, obs observer, sp spec[Out],
 	h func(ctx context.Context, req *mcp.CallToolRequest, in In) (any, *ToolError)) error {
-	schema, err := jsonschema.For[In](nil)
+	// json.RawMessage is a byte slice to the generator, which would tell a model to send an array of numbers: it holds
+	// any JSON value, so it gets the schema that says so.
+	schema, err := jsonschema.For[In](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+		reflect.TypeFor[json.RawMessage](): {},
+		// a value that is one string or a list of strings; numbers and booleans are accepted too and read as text
+		reflect.TypeFor[multiValue](): multiValueSchema(),
+	}})
 	if err != nil {
 		return fmt.Errorf("input schema for %s: %w", sp.name, err)
 	}

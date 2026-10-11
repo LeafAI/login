@@ -1,17 +1,22 @@
-# login
+# securl
 
-An MCP server that lets an AI agent obtain a valid cookie/token for sites that need a human to type
-credentials (GitLab, Jenkins, Kibana, KubeSphere, Nightingale v7, Archery, SkyWalking, and any site you describe in YAML).
-The agent never sees the password.
+A secure URL requestor for AI agents: an MCP server that gets an agent into sites that need a human to type credentials
+(GitLab, Jenkins, Kibana, KubeSphere, Nightingale v7, Archery, SkyWalking, and any site you describe in YAML). A person
+types the credential once, on a page opened from a DingTalk link, and the agent never sees the password.
+
+Secrets are kept in an encrypted vault that is locked at start and opened by the person typing its passphrase
+(`vault_unlock`). The agent then uses a site through `request`: securl adds the credentials to the request and removes
+them from the answer, so the agent never holds a cookie, a token or a password.
 
 ```
 go install github.com/LeafAI/securl@latest
-claude mcp add login -- login          # or add "login" to any MCP client's server list
+claude mcp add securl -- securl          # or add "securl" to any MCP client's server list
 ```
+
 
 ## How a login works
 
-1. The agent calls `login(url)`. A valid cached session is reused (probed first).
+1. The agent calls `session_open(url)`. A valid cached session is reused (probed first).
 2. `login` takes a key pair from a local pool (each key: ≤ 8 uses and ≤ 24 h), starts a one-shot JSON API on
    `127.0.0.1` and exposes it through an SSH reverse tunnel (pinggy, localhost.run, serveo, tunnl.gg, or your own).
 3. A DingTalk robot message carries **one link** to a static login page. The link's `#fragment` holds the mode
@@ -22,19 +27,19 @@ claude mcp add login -- login          # or add "login" to any MCP client's serv
 5. `login` decrypts it and runs the site's real login flow. If the site wants a second factor, the driver
    starts another round (a new link in DingTalk). The cookie/token is returned to the agent.
 
-The static page is served by GitHub Pages (version-pinned) or from your disk (`login page [dir]`); the tunnel
+The static page is served by GitHub Pages (version-pinned) or from your disk (`securl page [dir]`); the tunnel
 carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_TOOLS.md` (tool schemas).
 
 ## Production deployment
 
-![login: production deployment architecture](docs/architecture.svg)
+![securl: production deployment architecture](docs/architecture.svg)
 
-`login` runs as one process next to the agent (`go install`, or the Docker image) and talks to the agent over stdio.
+`securl` runs as one process next to the agent (`go install`, or the Docker image) and talks to the agent over stdio.
 Its config, key pool, encrypted sessions and audit log live in one private directory (a volume in Docker).
 Nothing listens on a public port: the only inbound path is the `ssh -R` tunnel that `login` itself opens, and it
 exists only while a person is being asked.
 
-1. The agent calls `login(url)`; the cookie or token goes back the same way.
+1. The agent calls `session_open(url)`; the session is opened and its use is described below.
 2. `login` sends one link through the DingTalk robot (signed webhook).
 3. The person receives it in DingTalk.
 4. The link opens the static page from GitHub Pages (or your own copy); it carries the key and tunnel address in
@@ -51,19 +56,36 @@ exists only while a person is being asked.
 - Agent-supplied text (`reason`, SQL title/remark/SQL) is escaped before it is put in DingTalk markdown, so it
   cannot add links or formatting to the message the human acts on.
 - `security.allowed_hosts` limits which sites the agent can target.
-- `sessions.persist: true` stores logins in `~/.config/login/sessions/` (AES-256-GCM; key file next to it, both
-  0600). This keeps secrets out of backups and greps, but does not protect against other processes of the same
-  user. Every reuse is validated against the site first; stale entries are dropped.
-- Returned cookies/tokens are secrets handed to the agent by design; `login_sessions` never shows them.
-  The exception is Archery: its `login` result is redacted because the `archery_*` tools use the session for the agent.
+- The agent chooses the URL, so the HTTP client refuses this machine's own addresses (loopback, link-local, the cloud
+  metadata endpoint) unless `security.allow_local_addresses: true`; it checks the address it actually connects to, so
+  a name that resolves to one is refused too. Private networks (10/8, 172.16/12, 192.168/16) stay reachable: that is
+  where your sites live. A redirect that leaves the site (another host or port, or https to http) is not followed,
+  so a site cannot bounce a login request, body included, to a second host; list an SSO server in `allowed_hosts`
+  if a site legitimately redirects to it.
+- Unknown keys in `config.yaml` are an error at startup and in `securl doctor`, with a suggestion ("did you mean
+  `allowed_hosts`?"), so a typo cannot silently switch a protection off.
+- `archery.allow_ddl: false` is enforced by a SQL scanner (comments, strings and `;` aware, MySQL executable
+  comments included, `PREPARE`/`EXECUTE` refused, anything unparsable refused), not a pattern match.
+- Every secret securl keeps (logged-in sessions, TOTP secrets) is in one **vault**: AES-256-GCM under a random master
+  key that is wrapped with a key derived from your passphrase (argon2id, at least 16 characters). Nothing secret is on
+  disk in the clear: no key file next to the data, and the OpenPGP keys that protect a link in transit live in memory
+  only. The vault is locked when the process starts; the agent calls `vault_unlock`, you get a DingTalk link and type
+  the passphrase on that page. Wrong passphrases are slowed (3 free attempts, then 30 s doubling to 15 min). Make it
+  with `securl vault init`, which also moves anything an earlier version left in plain files into it. Every reuse of a
+  session is validated against the site first; stale entries are dropped.
+- **The agent never holds a credential.** `session_open` says that a session exists, not what it contains; `request`
+  sends an HTTP request with the session's cookies and tokens put in here, and removes them from the answer (every
+  value in the encodings a server repeats them in, `Set-Cookie`, credential headers). The agent can reach only the
+  session's own site, cannot supply a `Cookie` or `Authorization` header, and redirects are never followed off the site.
+  The scrubber is a safety net with stated limits (see `MCP_TOOLS.md`), not the only layer.
 
 ## Set it up without editing YAML
 
 ```
-login config init                 # DingTalk robot + safety settings, with a test message
-login config site add https://gitlab.corp.example   # detects the driver, asks that driver's own questions
-login config site custom          # any other website: answer questions, no YAML
-login config set                  # list every setting; `set <key> <value>`, `get`, `unset`, `show`
+securl config init                 # DingTalk robot + safety settings, with a test message
+securl config site add https://gitlab.corp.example   # detects the driver, asks that driver's own questions
+securl config site custom          # any other website: answer questions, no YAML
+securl config set                  # list every setting; `set <key> <value>`, `get`, `unset`, `show`
 ```
 
 Each change is checked before it is saved (a typo such as `dingtalk.webhok` is refused with a suggestion), the
@@ -75,17 +97,17 @@ Secrets are asked without echo and shown masked.
 See `docs/OPERATING.md` for the full operator guide (setup order, per-site config, troubleshooting).
 
 ```
-login doctor                 # checks config, ssh, key dir, providers
-login doctor -tunnel         # starts each tunnel provider and fetches a page through it
-login doctor -send           # posts a test message through the DingTalk robot
-login doctor -site <url>     # no credentials: shows which driver/login method a site will get (use for every site)
-login page [dir]             # writes the static login page for local use
+securl doctor                 # checks config, ssh, key dir, providers
+securl doctor -tunnel         # starts each tunnel provider and fetches a page through it
+securl doctor -send           # posts a test message through the DingTalk robot
+securl doctor -site <url>     # no credentials: shows which driver/login method a site will get (use for every site)
+securl page [dir]             # writes the static login page for local use
 ```
 
 ## Configuration
 
-`~/.config/login/config.yaml` (override with `-config`). Environment: `LOGIN_DINGTALK_WEBHOOK`,
-`LOGIN_DINGTALK_SECRET`, `LOGIN_TUNNEL_ORDER`.
+`~/.config/securl/config.yaml` (override with `-config`). Environment: `SECURL_DINGTALK_WEBHOOK`,
+`SECURL_DINGTALK_SECRET`, `SECURL_TUNNEL_ORDER`.
 
 ```yaml
 dingtalk:
@@ -101,18 +123,19 @@ tunnel:
       command: ssh -R 0.0.0.0:{{port}}:localhost:{{port}} jump.corp.example
       url: https://jump.corp.example:{{port}}       # or url_regex to parse a printed URL
 web:
-  page_url: https://leafai.github.io/login/   # or file:///path/to/login-page/index.html
+  page_url: https://leafai.github.io/securl/   # or file:///path/to/securl-page/index.html
   ttl: 10m                                          # per round
 keys: {max_uses: 8, max_age: 24h}
 sessions:
   persist: true               # keep logins (encrypted) so a new MCP server process reuses them; default false
 mcp: {max_block_seconds: 50}
 archery:
-  allow_ddl: true            # false rejects CREATE/ALTER/DROP/TRUNCATE/RENAME
+  allow_ddl: true            # false rejects CREATE/ALTER/DROP/TRUNCATE/RENAME (and PREPARE/EXECUTE, which hide SQL)
   default_group: dba         # Archery resource group when a call gives none
   wait_timeout: 30m          # default approval timeout
 security:
   allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
+  allow_local_addresses: false        # true lets the agent reach localhost / link-local / metadata addresses (dev only)
 audit:
   enabled: true              # default; JSON lines (who/what/when, never secrets) in audit.jsonl next to this file
 limits:                      # protect people from request floods; only requests that reach a person count
@@ -142,12 +165,12 @@ sites:                       # any other website, no Go needed
 
 ## Tools and resources
 
-Every tool has a title and an output schema. Read-only resources: `login://sites`, `login://sessions`,
-`login://policy` (the limits that apply to the agent). The server also sends instructions on how to use the tools.
+Every tool has a title and an output schema. Read-only resources: `securl://sites`, `securl://sessions`,
+`securl://policy` (the limits that apply to the agent). The server also sends instructions on how to use the tools.
 
-`login`, `login_wait`, `login_sites`, `login_sessions`, `logout`, `archery_instances`, `archery_groups`, `archery_query`,
+`vault_status`, `vault_unlock`, `session_open`, `session_wait`, `site_list`, `session_list`, `session_close`, `archery_instances`, `archery_groups`, `archery_query`,
 `archery_run_sql`, `archery_wait`, `archery_workflow_status`, `archery_cancel`.
-Long operations return a `pending` result with an id after `max_block_seconds`; resume with `login_wait` /
+Long operations return a `pending` result with an id after `max_block_seconds`; resume with `session_wait` /
 `archery_wait`.
 
 ## Adding a website
@@ -167,17 +190,18 @@ them), and (when Node + Playwright + Chromium exist) browser end-to-end tests th
 
 ```
 docker build -t login --build-arg VERSION=$(git describe --tags --always) .
-docker run -it --rm -v login-data:/home/login/.config/login login config init
-docker run -i --rm -v login-data:/home/login/.config/login login          # the MCP server (stdio)
+docker run -it --rm -v securl-data:/home/securl/.config/securl securl vault init
+docker run -it --rm -v securl-data:/home/securl/.config/securl securl config init
+docker run -i --rm -v securl-data:/home/securl/.config/securl securl          # the MCP server (stdio)
 ```
 
 The image contains `ssh` (tunnels), runs as a non-root user and keeps config, keys and the audit log in the volume.
-`login version` prints the build.
+`securl version` prints the build.
 
 ## Two optional TOTP factors
 
 ```
-login config totp init     # make the secrets, register them in your authenticator (1Password: 10 min is its maximum period)
+securl config totp init     # make the secrets, register them in your authenticator (1Password: 10 min is its maximum period)
 ```
 
 An **unlock code** (long period) hides the site, the tunnel address and the one-shot password in the DingTalk link until
@@ -237,7 +261,7 @@ its source, and 7.9.3 against a live site. **Nightingale** (v7) was checked agai
 the human inside the login step) and optional RSA password encryption.
 
 **Not verified against live systems:**
-- the individual SSH provider services (use `login doctor -tunnel`);
+- the individual SSH provider services (use `securl doctor -tunnel`);
 - Kibana's, Jenkins's and KubeSphere's second-factor paths: stock versions have none, and the retry path for custom setups is a
   guess that has never run against a real one (a 2FA plugin's extra step on Jenkins is reported as an error, not guessed);
 - Nightingale's optional captcha and RSA password encryption (this instance has neither);

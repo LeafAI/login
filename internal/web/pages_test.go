@@ -33,7 +33,7 @@ func TestPagesSiteMatchesTheEmbeddedPage(t *testing.T) {
 	if err := web.WriteTo(embedded); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"index.html", "login.css", "login.js", "openpgp.min.js"} {
+	for _, name := range []string{"index.html", "securl.css", "securl.js", "openpgp.min.js"} {
 		a, err := os.ReadFile(filepath.Join(site, name))
 		if err != nil {
 			t.Fatal(err)
@@ -49,7 +49,7 @@ func TestPagesSiteMatchesTheEmbeddedPage(t *testing.T) {
 	}
 	for _, line := range web.Checksums() {
 		if !strings.Contains(string(sums), line) {
-			t.Errorf("SHA256SUMS lacks %q (what `login page` prints)", line)
+			t.Errorf("SHA256SUMS lacks %q (what `securl page` prints)", line)
 		}
 	}
 	for _, f := range []string{".nojekyll", "robots.txt"} {

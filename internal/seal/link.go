@@ -9,10 +9,10 @@ package seal
 // be the one valid when the person opens it. The blob therefore carries one "slot" per candidate code, each wrapping the
 // same random 256-bit link key; the page tries them all with the code the person types.
 //
-//	stretched = PBKDF2-HMAC-SHA256(code, salt = SHA-256("login/link/v1|fingerprint|mode|round"), 200000, 32)
-//	slotKey   = HKDF-SHA256(ikm = stretched, salt = SHA-256("login/link/v1"), info = "login/link/v1|slot|fingerprint|mode|round")
-//	slot      = IV(12) || AES-256-GCM(slotKey, IV, linkKey, aad = "login/link/v1|slot|fingerprint|mode|round")   (60 bytes)
-//	body      = IV(12) || AES-256-GCM(linkKey, IV, json(params), aad = "login/link/v1|body|fingerprint|mode|round")
+//	stretched = PBKDF2-HMAC-SHA256(code, salt = SHA-256("securl/link/v1|fingerprint|mode|round"), 200000, 32)
+//	slotKey   = HKDF-SHA256(ikm = stretched, salt = SHA-256("securl/link/v1"), info = "securl/link/v1|slot|fingerprint|mode|round")
+//	slot      = IV(12) || AES-256-GCM(slotKey, IV, linkKey, aad = "securl/link/v1|slot|fingerprint|mode|round")   (60 bytes)
+//	body      = IV(12) || AES-256-GCM(linkKey, IV, json(params), aad = "securl/link/v1|body|fingerprint|mode|round")
 //	blob      = "l1." + base64url(slotCount(1) || slot_1 || ... || slot_n || body)
 //
 // The salt cannot be random per link, because the page only has the blob and the code; it is bound to the key and the
@@ -43,7 +43,7 @@ const (
 	// MaxLinkSlots bounds the number of candidate codes a link carries: each costs 60 bytes in a URL fragment and a
 	// PBKDF2 run in the browser.
 	MaxLinkSlots = 4
-	linkLabel    = "login/link/v1"
+	linkLabel    = "securl/link/v1"
 	slotSize     = ivSize + keySize + 16 // IV + wrapped 32-byte key + GCM tag
 )
 

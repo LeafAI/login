@@ -19,30 +19,26 @@ func forGenerations(t *testing.T, fn func(t *testing.T, legacy bool)) {
 // loginArchery completes the (password-only) login round through the real page.
 func loginArchery(t *testing.T, e *env, fake *httptest.Server) {
 	t.Helper()
-	out, _ := e.call(t, "login", map[string]any{"url": fake.URL, "site": "archery", "max_block_seconds": 1})
+	out, _ := e.call(t, "session_open", map[string]any{"url": fake.URL, "site": "archery", "max_block_seconds": 1})
 	if out["status"] != "pending" {
 		t.Fatalf("expected pending login, got %v", out)
 	}
 	human(t, e.rec.wait(t, 1), e.dir, "submit", `{"username":"alice","password":"pw"}`, "")
-	out, isErr := e.call(t, "login_wait", map[string]any{"login_id": out["login_id"], "max_block_seconds": 20})
-	if isErr || out["status"] != "ok" || out["redacted"] != true {
+	out, isErr := e.call(t, "session_wait", map[string]any{"login_id": out["login_id"], "max_block_seconds": 20})
+	if isErr || out["status"] != "ok" {
 		t.Fatalf("archery login: %v", out)
 	}
-	// The agent never holds Archery's session: the archery_* tools use it on its behalf.
-	raw := fmt.Sprint(out)
-	for _, secret := range []string{"sessionid", "csrftoken", "X-CSRFToken", "cookie_header"} {
-		if strings.Contains(raw, secret) {
-			t.Fatalf("an Archery login result must not carry %q: %v", secret, out)
-		}
-	}
+	// No site hands its credentials to the agent: the archery_* tools use the session on the agent's behalf.
+	assertNoCredentials(t, out, "sessionid", "csrftoken", "X-CSRFToken")
 	if out["site"] != "archery" || out["auth"] != "cookie" {
 		t.Errorf("the result still says which site and how it authenticates: %v", out)
 	}
-	// ...and a repeated login (cached) is redacted too.
-	again, _ := e.call(t, "login", map[string]any{"url": fake.URL, "site": "archery"})
-	if again["cached"] != true || again["redacted"] != true || strings.Contains(fmt.Sprint(again), "sessionid") {
+	// ...and a repeated login (cached) says the same.
+	again, _ := e.call(t, "session_open", map[string]any{"url": fake.URL, "site": "archery"})
+	if again["cached"] != true {
 		t.Fatalf("cached archery login: %v", again)
 	}
+	assertNoCredentials(t, again, "sessionid", "csrftoken")
 }
 
 func TestArcheryToolsEndToEnd(t *testing.T) {

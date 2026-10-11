@@ -57,8 +57,11 @@ func Require(t *testing.T) {
 // Result is what the page showed after the scripted interaction.
 type Result struct {
 	Fpr         string   `json:"fpr"`
-	Code        string   `json:"code"`  // the verification code shown to the human
-	Title       string   `json:"title"` // document title
+	Code        string   `json:"code"`        // the verification code shown to the human
+	Title       string   `json:"title"`       // document title
+	BodyText    string   `json:"bodyText"`    // everything the person can read on the page
+	FieldLabels []string `json:"fieldLabels"` // the label of every input of the form
+	FieldTypes  []string `json:"fieldTypes"`  // the input type of every field ("password" hides what is typed)
 	HashAfter   string   `json:"hashAfter"`
 	Msg         string   `json:"msg"`
 	MainHidden  bool     `json:"mainHidden"`

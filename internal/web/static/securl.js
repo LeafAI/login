@@ -22,6 +22,10 @@
       { name: 'password', label: 'Password', type: 'password', ac: 'off' }] },
     totp: { label: 'Two-factor code', fields: [
       { name: 'code', label: 'One-time code', type: 'text', ac: 'one-time-code', numeric: true }] },
+    // The vault step asks for the one value that opens everything login keeps. Its wording and its single field are fixed
+    // here and never read from the link: a link that could choose what is shown above this input could ask for anything.
+    vault: { label: 'Unlock the vault', fixedTitle: true, fields: [
+      { name: 'passphrase', label: 'Vault passphrase', type: 'password', ac: 'off' }] },
   };
   const FIELD_NAME = /^[a-z_][a-z0-9_]{0,31}$/;
   const MODE_NAME = /^[a-z0-9_-]{1,32}$/;
@@ -29,13 +33,13 @@
   const IMAGE_URL = /^data:image\/(png|jpeg|gif);base64,[A-Za-z0-9+/]+=*$/;
   const LINK_VERSION = '2';
   const SEAL_PREFIX = 'v1.';
-  const SEAL_LABEL = 'login/seal/v1';
+  const SEAL_LABEL = 'securl/seal/v1';
   const SEAL_PREFIX_FACTOR = 'v2.';
-  const SEAL_LABEL_FACTOR = 'login/seal/v2';
+  const SEAL_LABEL_FACTOR = 'securl/seal/v2';
   const FACTOR_ITERATIONS = 200000; // must equal seal.FactorIterations on the server
   const FACTOR_DIGITS = /^[678]$/;
   const LINK_PREFIX = 'l1.';
-  const LINK_LABEL = 'login/link/v1';
+  const LINK_LABEL = 'securl/link/v1';
   const LINK_IV = 12;
   const LINK_SLOT = LINK_IV + 32 + 16; // IV + wrapped 32-byte key + GCM tag
   const LINK_MAX_SLOTS = 4;
@@ -92,6 +96,7 @@
         return { name: f.name, label: String(f.label || f.name).slice(0, 60), type: f.secret ? 'password' : 'text', ac: 'off', image };
       });
     } else if (MODES[mode]) {
+      if (MODES[mode].fixedTitle && p.has('fields')) throw new Error('This step does not take a field list. Do not continue.');
       fields = MODES[mode].fields;
     } else {
       throw new Error('Unknown step "' + mode.slice(0, 32) + '".');
@@ -211,9 +216,11 @@
     $('paste').hidden = true;
     $('main').hidden = false;
     const label = ctx.mode === 'custom' ? 'Additional information' : MODES[ctx.mode].label;
-    document.title = label + ' - ' + (ctx.site || 'Login');
-    $('title').textContent = label + ' - ' + (ctx.site || 'site');
-    $('d-site').textContent = ctx.site || '(not given)';
+    const fixed = ctx.mode !== 'custom' && MODES[ctx.mode].fixedTitle;
+    // A fixed step shows no text that came from the link: not even the site name, which an attacker could write a sentence into.
+    document.title = fixed ? label : label + ' - ' + (ctx.site || 'Login');
+    $('title').textContent = fixed ? label : label + ' - ' + (ctx.site || 'site');
+    $('d-site').textContent = fixed ? 'The login vault (everything login keeps)' : (ctx.site || '(not given)');
     $('d-mode').textContent = label + ' (step ' + ctx.round + ')';
     $('d-host').textContent = new URL(ctx.api).host;
     $('d-fpr').textContent = grouped(ctx.fpr);

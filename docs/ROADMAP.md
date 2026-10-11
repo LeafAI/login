@@ -13,11 +13,11 @@ rediscover it.
 | Sites | gitlab, jenkins, kibana, kubesphere, nightingale, archery (1.x and REST), skywalking, plus YAML `generic` sites |
 | Sessions | in-memory or encrypted-on-disk cache, probe before reuse, one flow per site (singleflight) |
 | Guardrails | `security.allowed_hosts`, escaped agent text in messages, key rotation (<= 8 uses / 24 h) |
-| Setup without YAML | `login config init`, `site add`, `site custom`, `set/get/unset/show` (validated, comments kept, backup) |
+| Setup without YAML | `securl config init`, `site add`, `site custom`, `set/get/unset/show` (validated, comments kept, backup) |
 | Accountability | append-only JSON-lines audit log (metadata only, never secrets or SQL text) |
 | Protecting people | per-site and overall request limits; cool-down after a Reject; `rate_limited` error |
-| MCP surface | output schemas and titles on every tool, resources `login://sites|sessions|policy`, server instructions |
-| Operations | `login version`, Dockerfile, CI build check, `login doctor` covers audit and limits |
+| MCP surface | output schemas and titles on every tool, resources `securl://sites|sessions|policy`, server instructions |
+| Operations | `securl version`, Dockerfile, CI build check, `securl doctor` covers audit and limits |
 | Transport hardening | one-shot tunnels (checked before use, closed with their process tree); AES-256-GCM seal under a per-round password; optional unlock (long-period TOTP) and sealing (30 s TOTP) factors |
 
 ## Planned (tracked, not started)
@@ -47,14 +47,11 @@ They are ordered by value; 1 and 2 are prerequisites for sharing one gateway bet
 * **Design.** Key the cache by `(principal, site)`; an explicit `shared: true` policy per site keeps today's behaviour.
 * **First step.** Add the principal to the cache key; default to a single anonymous principal so stdio is unchanged.
 
-### 4. The agent should not hold plaintext credentials
+### 4. The agent should not hold plaintext credentials — done
 
-* **Problem.** `login` returns raw cookies and tokens, so they enter the agent's context and can be leaked
-  by a prompt-injected agent. This is the largest remaining security gap.
-* **Design.** A `login_request(url, method, headers, body)` tool: the gateway makes the call with the cached
-  session and returns the response, so the agent never sees a secret. `login` becomes redacted by default;
-  returning secrets needs an explicit `reveal: true` that policy must allow. Re-login on 401 behind the scenes.
-* **First step.** `login_request` limited to GET and to hosts in `allowed_hosts`.
+`request` makes the call with the session and returns the scrubbed answer; no tool returns a credential. What remains:
+re-login on a 401 behind the scenes (today the agent is told to call `session_open` with `force_refresh`), and a
+per-site allow-list of paths and methods.
 
 ### 5. Token renewal
 

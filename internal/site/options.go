@@ -6,7 +6,7 @@ import (
 )
 
 // Option describes one driver-specific setting (the `site_options:` section) so that tooling, such as
-// `login config`, can ask the user for it without them having to know the YAML layout.
+// `securl config`, can ask the user for it without them having to know the YAML layout.
 type Option struct {
 	Key     string   // key under site_options.<driver>
 	Label   string   // one-line question shown to the user
@@ -58,4 +58,25 @@ func OptionOf(driver, key string) (Option, bool) {
 		}
 	}
 	return Option{}, false
+}
+
+// ValidateOptions checks a driver's `site_options:` entry against the options the driver declares:
+// every key must be one it knows (a typo would otherwise silently leave the setting at its default) and
+// every value must satisfy that option's constraints.
+func ValidateOptions(driver string, opts map[string]string) error {
+	known := OptionsOf(driver)
+	keys := make([]string, 0, len(known))
+	for _, o := range known {
+		keys = append(keys, o.Key)
+	}
+	for k, v := range opts {
+		o, ok := OptionOf(driver, k)
+		if !ok {
+			return fmt.Errorf("driver %q has no option %q (valid options: %s)", driver, k, strings.Join(keys, ", "))
+		}
+		if err := o.Validate(v); err != nil {
+			return fmt.Errorf("driver %q: %w", driver, err)
+		}
+	}
+	return nil
 }

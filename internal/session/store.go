@@ -1,28 +1,25 @@
 package session
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/LeafAI/securl/internal/filelock"
 	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/vault"
 )
 
-// Store persists sessions in an AES-256-GCM encrypted file so that a new MCP server process (every
-// agent session starts one) can reuse a login without bothering the human again.
-//
-// The key lives next to the data (both 0600): this keeps sessions out of backups, greps and accidental
-// disclosure, but it does not protect against another process running as the same user.
+// Store persists sessions in the vault, so that a new MCP server process (every agent session starts one) can reuse a
+// login without bothering the human again. Nothing is written outside the vault: there is no key file next to the data,
+// and while the vault is locked the store holds nothing and gives nothing.
 type Store struct {
-	Dir string
+	v *vault.Vault
 }
+
+// NewStore returns a store that keeps its records in v, under the "session/" prefix.
+func NewStore(v *vault.Vault) *Store { return &Store{v: v} }
+
+const prefix = "session/"
 
 type cookieJSON struct {
 	Name     string    `json:"n"`
@@ -62,85 +59,59 @@ func (r record) session() *site.Session {
 	return s
 }
 
-func (s *Store) dataPath() string { return filepath.Join(s.Dir, "sessions.enc") }
-func (s *Store) keyPath() string  { return filepath.Join(s.Dir, "sessions.key") }
+func entryName(base string) string { return prefix + base }
 
-func (s *Store) aead(create bool) (cipher.AEAD, error) {
-	key, err := os.ReadFile(s.keyPath())
-	if errors.Is(err, os.ErrNotExist) && create {
-		key = make([]byte, 32)
-		rand.Read(key)
-		if err := os.MkdirAll(s.Dir, 0o700); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(s.keyPath(), key, 0o600); err != nil {
-			return nil, err
-		}
-	} else if err != nil {
-		return nil, err
-	}
-	if len(key) != 32 {
-		return nil, errors.New("session store: bad key file")
-	}
-	b, _ := aes.NewCipher(key)
-	return cipher.NewGCM(b)
-}
-
-// load returns the stored records; a missing, corrupt or foreign-key file reads as empty.
+// load returns the stored records. A record that cannot be read is skipped, so one bad entry hides no other; a locked
+// vault reads as empty.
 func (s *Store) load() map[string]record {
 	out := map[string]record{}
-	raw, err := os.ReadFile(s.dataPath())
-	if err != nil {
-		return out
-	}
-	g, err := s.aead(false)
-	if err != nil || len(raw) < g.NonceSize() {
-		return out
-	}
-	plain, err := g.Open(nil, raw[:g.NonceSize()], raw[g.NonceSize():], nil)
-	if err != nil {
-		return out
-	}
-	var list []record
-	if json.Unmarshal(plain, &list) != nil {
-		return out
-	}
-	for _, r := range list {
+	for _, name := range s.v.Keys(prefix) {
+		raw, err := s.v.Get(name)
+		if err != nil {
+			continue
+		}
+		var r record
+		if json.Unmarshal(raw, &r) != nil || r.Base == "" || entryName(r.Base) != name {
+			continue
+		}
 		out[r.Base] = r
 	}
 	return out
 }
 
-func (s *Store) save(m map[string]record) error {
-	g, err := s.aead(true)
-	if err != nil {
-		return err
+// update applies fn to the stored records and writes back what changed. The vault's own locking makes each write safe
+// across processes; fn sees a snapshot and may add or remove records.
+func (s *Store) update(fn func(map[string]record)) error {
+	before := s.load()
+	after := map[string]record{}
+	for k, r := range before {
+		after[k] = r
 	}
-	list := make([]record, 0, len(m))
-	for _, r := range m {
-		list = append(list, r)
+	fn(after)
+	for base, r := range after {
+		if old, had := before[base]; had && sameRecord(old, r) {
+			continue
+		}
+		raw, err := json.Marshal(r)
+		if err != nil {
+			return err
+		}
+		if err := s.v.Put(entryName(base), raw); err != nil {
+			return err
+		}
 	}
-	plain, _ := json.Marshal(list)
-	nonce := make([]byte, g.NonceSize())
-	rand.Read(nonce)
-	tmp := s.dataPath() + ".tmp"
-	if err := os.WriteFile(tmp, append(nonce, g.Seal(nil, nonce, plain, nil)...), 0o600); err != nil {
-		return err
+	for base := range before {
+		if _, kept := after[base]; !kept {
+			if err := s.v.Delete(entryName(base)); err != nil {
+				return err
+			}
+		}
 	}
-	return os.Rename(tmp, s.dataPath())
+	return nil
 }
 
-// update runs fn on the current records under a cross-process lock and saves the result.
-func (s *Store) update(fn func(map[string]record)) error {
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
-		return err
-	}
-	unlock, err := filelock.Lock(filepath.Join(s.Dir, ".lock"))
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	m := s.load()
-	fn(m)
-	return s.save(m)
+func sameRecord(a, b record) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
 }

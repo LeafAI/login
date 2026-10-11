@@ -1,11 +1,9 @@
-// Package config loads ~/.config/login/config.yaml with environment overrides.
+// Package config loads ~/.config/securl/config.yaml with environment overrides.
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +14,7 @@ import (
 	"github.com/LeafAI/securl/internal/seal"
 	"github.com/LeafAI/securl/internal/site/generic"
 	"github.com/LeafAI/securl/internal/totp"
+	"github.com/LeafAI/securl/internal/vault"
 )
 
 type Config struct {
@@ -26,6 +25,7 @@ type Config struct {
 	MCP      MCP      `yaml:"mcp"`
 	Sessions Sessions `yaml:"sessions"`
 	Security Security `yaml:"security"`
+	Vault    Vault    `yaml:"vault"`
 	Audit    Audit    `yaml:"audit"`
 	Limits   Limits   `yaml:"limits"`
 	// Aliases maps a hostname (or host:port) to a site driver name, for sites whose hostname does not
@@ -41,17 +41,33 @@ type Config struct {
 	Sites []generic.Spec `yaml:"sites"`
 }
 
+// Vault configures the encrypted store that holds every secret login keeps (logged-in sessions, TOTP secrets). It is
+// locked whenever the process starts and opens for the vault passphrase.
+type Vault struct {
+	// Dir holds the vault files (default: "vault" next to the config file).
+	Dir string `yaml:"dir"`
+	// IdleLock locks the vault again after this long without use (default 0: it stays open until the process ends).
+	IdleLock time.Duration `yaml:"idle_lock"`
+	// UnlockTTL is how long the DingTalk link that unlocks the vault stays valid (default 10 minutes).
+	UnlockTTL time.Duration `yaml:"unlock_ttl"`
+}
+
+// Sessions is kept so that existing config files still load. Logins are always stored in the vault now: a session
+// is a credential, and credentials live nowhere else.
 type Sessions struct {
-	// Persist keeps logins in an encrypted file so later MCP server processes can reuse them
-	// (default false: sessions live in memory only).
-	Persist bool   `yaml:"persist"`
-	Dir     string `yaml:"dir"`
+	// Persist is ignored: sessions are always kept in the vault.
+	Persist bool `yaml:"persist"`
+	// Dir is ignored; it only names where an older version kept sessions, so that they can be moved into the vault.
+	Dir string `yaml:"dir"`
 }
 
 type Security struct {
 	// AllowedHosts, when non-empty, restricts which sites the agent may log in to. Entries are
 	// glob patterns matched against "host" and "host:port", e.g. "*.corp.example".
 	AllowedHosts []string `yaml:"allowed_hosts"`
+	// AllowLocalAddresses lets the agent reach this machine's own addresses (loopback, link-local, the cloud
+	// metadata endpoint). Off by default: an agent-chosen URL must not become a way to probe local services.
+	AllowLocalAddresses bool `yaml:"allow_local_addresses"`
 
 	// LinkTOTP is the unlock factor, a long-period TOTP: with it on, the site, the tunnel address and the one-shot
 	// password are encrypted in the DingTalk link and the person types its code in the page to read them. The default
@@ -67,7 +83,7 @@ type TOTP struct {
 	Enabled    bool          `yaml:"enabled"`
 	Period     time.Duration `yaml:"period"`
 	Digits     int           `yaml:"digits"`
-	SecretFile string        `yaml:"secret_file"` // 0600; created by `login config totp init`
+	SecretFile string        `yaml:"secret_file"` // where an older version kept the secret; only read to move it into the vault
 }
 
 // On reports whether the factor is switched on.
@@ -89,10 +105,23 @@ func (s Security) Validate() error {
 	return nil
 }
 
-// Sources loads the secrets of the factors that are switched on. A factor that is on but whose secret cannot be read
-// is an error: starting without it would silently drop the protection the person asked for.
-func (s Security) Sources() (link, seal *totp.Source, err error) {
-	load := func(name string, t TOTP) (*totp.Source, error) {
+// The vault entries that hold the two factors' secrets.
+const (
+	LinkSecretName = "totp/link"
+	SealSecretName = "totp/seal"
+)
+
+// SecretReader is where the factors' secrets are read from: the vault.
+type SecretReader interface {
+	Get(name string) ([]byte, error)
+}
+
+// Sources loads the secrets of the factors that are switched on from the vault. A factor that is on but whose secret
+// cannot be read (it is missing, unreadable, or the vault is locked) is an error: starting without it would silently drop
+// the protection the person asked for. A secret left in the legacy secret_file is never used; it is not protected by the
+// vault, and `securl vault init` moves it in.
+func (s Security) Sources(secrets SecretReader) (link, seal *totp.Source, err error) {
+	load := func(name, entry string, t TOTP) (*totp.Source, error) {
 		if !t.Enabled {
 			return nil, nil
 		}
@@ -100,16 +129,23 @@ func (s Security) Sources() (link, seal *totp.Source, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("security.%s: %w", name, err)
 		}
-		secret, err := totp.LoadSecret(t.SecretFile)
+		raw, err := secrets.Get(entry)
 		if err != nil {
-			return nil, fmt.Errorf("security.%s is on but its secret cannot be used (run `login config totp init`): %w", name, err)
+			if errors.Is(err, vault.ErrLocked) || errors.Is(err, vault.ErrNotInitialized) {
+				return nil, fmt.Errorf("security.%s is on but its secret cannot be read: %w", name, err)
+			}
+			return nil, fmt.Errorf("security.%s is on but its secret is not in the vault (run `securl config totp init`): %w", name, err)
+		}
+		secret, err := totp.ParseSecret(string(raw))
+		if err != nil {
+			return nil, fmt.Errorf("security.%s is on but its secret in the vault is unusable: %w", name, err)
 		}
 		return &totp.Source{Secret: secret, Settings: st}, nil
 	}
-	if link, err = load("link_totp", s.LinkTOTP); err != nil {
+	if link, err = load("link_totp", LinkSecretName, s.LinkTOTP); err != nil {
 		return nil, nil, err
 	}
-	if seal, err = load("seal_totp", s.SealTOTP); err != nil {
+	if seal, err = load("seal_totp", SealSecretName, s.SealTOTP); err != nil {
 		return nil, nil, err
 	}
 	return link, seal, nil
@@ -194,19 +230,26 @@ type Archery struct {
 // DDLAllowed reports whether DDL statements may be submitted (default true).
 func (a Archery) DDLAllowed() bool { return a.AllowDDL == nil || *a.AllowDDL }
 
+// appName is the name of the program, and of its directory under the user's config directory.
+const appName = "securl"
+
 // DefaultPath returns the default config file location.
 func DefaultPath() string {
-	if d, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(d, "login", "config.yaml")
+	d, err := os.UserConfigDir()
+	if err != nil {
+		return "config.yaml"
 	}
-	return "config.yaml"
+	return filepath.Join(d, appName, "config.yaml")
 }
 
-// Load reads path (a missing file is not an error), applies defaults and env overrides.
+// Load reads path (a missing file is not an error), rejects unknown keys, applies defaults and env overrides.
 func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
+	}
+	if err := ParseStrict(b); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return Parse(b, filepath.Dir(path))
 }
@@ -223,24 +266,21 @@ func Parse(b []byte, dir string) (*Config, error) {
 	return c, nil
 }
 
-// ParseStrict reports fields in b that Config does not know (typos); it does not apply defaults.
-func ParseStrict(b []byte) error {
-	dec := yaml.NewDecoder(bytes.NewReader(b))
-	dec.KnownFields(true)
-	if err := dec.Decode(&Config{}); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	return nil
-}
+// The environment variables that override the file.
+const (
+	envWebhook     = "SECURL_DINGTALK_WEBHOOK"
+	envSecret      = "SECURL_DINGTALK_SECRET"
+	envTunnelOrder = "SECURL_TUNNEL_ORDER"
+)
 
 func (c *Config) applyEnv() {
-	if v := os.Getenv("LOGIN_DINGTALK_WEBHOOK"); v != "" {
+	if v := os.Getenv(envWebhook); v != "" {
 		c.DingTalk.Webhook = v
 	}
-	if v := os.Getenv("LOGIN_DINGTALK_SECRET"); v != "" {
+	if v := os.Getenv(envSecret); v != "" {
 		c.DingTalk.Secret = v
 	}
-	if v := os.Getenv("LOGIN_TUNNEL_ORDER"); v != "" {
+	if v := os.Getenv(envTunnelOrder); v != "" {
 		c.Tunnel.Order = strings.Split(v, ",")
 	}
 }
@@ -276,8 +316,14 @@ func (c *Config) applyDefaults(dir string) {
 	if c.Sessions.Dir == "" {
 		c.Sessions.Dir = filepath.Join(dir, "sessions")
 	}
+	if c.Vault.Dir == "" {
+		c.Vault.Dir = filepath.Join(dir, "vault")
+	}
+	if c.Vault.UnlockTTL == 0 {
+		c.Vault.UnlockTTL = 10 * time.Minute
+	}
 	if c.Web.PageURL == "" {
-		c.Web.PageURL = "https://leafai.github.io/login/"
+		c.Web.PageURL = "https://leafai.github.io/securl/"
 	}
 	if c.Web.TTL == 0 {
 		c.Web.TTL = 10 * time.Minute
