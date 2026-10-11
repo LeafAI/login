@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 // Client calls Archery with an established session.

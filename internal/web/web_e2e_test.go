@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/api"
-	"github.com/LeafAI/login/internal/browsertest"
-	"github.com/LeafAI/login/internal/keyring"
-	"github.com/LeafAI/login/internal/seal"
-	"github.com/LeafAI/login/internal/web"
+	"github.com/LeafAI/securl/internal/api"
+	"github.com/LeafAI/securl/internal/browsertest"
+	"github.com/LeafAI/securl/internal/keyring"
+	"github.com/LeafAI/securl/internal/seal"
+	"github.com/LeafAI/securl/internal/web"
 )
 
 // rig is a real round API plus a link to the real static page for it.

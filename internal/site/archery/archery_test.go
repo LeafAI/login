@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/site/archery/archerytest"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/site/archery/archerytest"
 )
 
 func setup(t *testing.T, f *archerytest.Fake, answers map[string]site.Credentials) (*Client, *sitetestAsker) {

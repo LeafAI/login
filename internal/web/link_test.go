@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/seal"
+	"github.com/LeafAI/securl/internal/seal"
 )
 
 func baseRound() Round {

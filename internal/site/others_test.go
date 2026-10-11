@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/site"
-	_ "github.com/LeafAI/login/internal/site/kibana"
-	"github.com/LeafAI/login/internal/site/sitetest"
+	"github.com/LeafAI/securl/internal/site"
+	_ "github.com/LeafAI/securl/internal/site/kibana"
+	"github.com/LeafAI/securl/internal/site/sitetest"
 )
 
 func run(t *testing.T, name string, srv *httptest.Server, a *sitetest.Asker) (*site.Session, error) {

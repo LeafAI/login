@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeafAI/login/internal/notify"
+	"github.com/LeafAI/securl/internal/notify"
 )
 
 // Errors with stable meaning for the MCP layer.

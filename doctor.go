@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeafAI/login/internal/audit"
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/mcpserver"
-	"github.com/LeafAI/login/internal/notify"
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/totp"
-	"github.com/LeafAI/login/internal/tunnel"
+	"github.com/LeafAI/securl/internal/audit"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/notify"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/totp"
+	"github.com/LeafAI/securl/internal/tunnel"
 )
 
 // runDoctor checks the local setup. Flags: -config, -tunnel (really start each tunnel provider),

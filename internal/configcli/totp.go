@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/configedit"
-	"github.com/LeafAI/login/internal/totp"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/configedit"
+	"github.com/LeafAI/securl/internal/totp"
 )
 
 // A factor as the command line knows it: its name in the config, what people call it, and its key in the file.

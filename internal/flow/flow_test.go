@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/keyring"
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/keyring"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 type stubDriver struct{}

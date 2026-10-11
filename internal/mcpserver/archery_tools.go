@@ -9,8 +9,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/site/archery"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/site/archery"
 )
 
 // archeryClient logs in (cached or interactive) and returns an API client. When the login is still

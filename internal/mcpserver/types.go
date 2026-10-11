@@ -3,7 +3,7 @@ package mcpserver
 import (
 	"time"
 
-	"github.com/LeafAI/login/internal/site/archery"
+	"github.com/LeafAI/securl/internal/site/archery"
 )
 
 // ToolError is the structured payload of a failed tool call.

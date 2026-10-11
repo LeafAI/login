@@ -20,7 +20,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
-	"github.com/LeafAI/login/internal/filelock"
+	"github.com/LeafAI/securl/internal/filelock"
 )
 
 type Pool struct {

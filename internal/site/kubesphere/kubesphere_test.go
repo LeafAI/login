@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/site/sitetest"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/site/sitetest"
 )
 
 // fakeKS imitates the KubeSphere 3.4.1 behaviour found in its source: /oauth/token authenticates local

@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/configedit"
-	"github.com/LeafAI/login/internal/mcpserver"
-	"github.com/LeafAI/login/internal/site"
-	"github.com/LeafAI/login/internal/site/generic"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/configedit"
+	"github.com/LeafAI/securl/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/site"
+	"github.com/LeafAI/securl/internal/site/generic"
 )
 
 // Env is everything `login config` needs from its surroundings (injected so it can be tested).

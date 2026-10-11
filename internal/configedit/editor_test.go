@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/site/generic"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/site/generic"
 )
 
 func write(t *testing.T, content string) string {

@@ -13,9 +13,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/LeafAI/login/internal/seal"
-	"github.com/LeafAI/login/internal/site/generic"
-	"github.com/LeafAI/login/internal/totp"
+	"github.com/LeafAI/securl/internal/seal"
+	"github.com/LeafAI/securl/internal/site/generic"
+	"github.com/LeafAI/securl/internal/totp"
 )
 
 type Config struct {

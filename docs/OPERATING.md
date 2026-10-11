@@ -11,7 +11,7 @@ change keeps the previous file as `config.yaml.bak`.
 
 ## 1. What you need
 
-* Go 1.25+ to install: `go install github.com/LeafAI/login@latest`, or the Docker image (see the README).
+* Go 1.25+ to install: `go install github.com/LeafAI/securl@latest`, or the Docker image (see the README).
 * An outbound `ssh` client and network access to at least one tunnel provider (or your own jump server).
 * A DingTalk **custom robot** in the group chat of whoever will type the credentials.
 * Register the server with your MCP client, e.g. `claude mcp add login -- login`.

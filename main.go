@@ -22,17 +22,17 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/mcpserver"
-	"github.com/LeafAI/login/internal/web"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/web"
 
-	_ "github.com/LeafAI/login/internal/site/archery"
-	_ "github.com/LeafAI/login/internal/site/gitlab"
-	_ "github.com/LeafAI/login/internal/site/jenkins"
-	_ "github.com/LeafAI/login/internal/site/kibana"
-	_ "github.com/LeafAI/login/internal/site/kubesphere"
-	_ "github.com/LeafAI/login/internal/site/nightingale"
-	_ "github.com/LeafAI/login/internal/site/noauth"
+	_ "github.com/LeafAI/securl/internal/site/archery"
+	_ "github.com/LeafAI/securl/internal/site/gitlab"
+	_ "github.com/LeafAI/securl/internal/site/jenkins"
+	_ "github.com/LeafAI/securl/internal/site/kibana"
+	_ "github.com/LeafAI/securl/internal/site/kubesphere"
+	_ "github.com/LeafAI/securl/internal/site/nightingale"
+	_ "github.com/LeafAI/securl/internal/site/noauth"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/totp"
+	"github.com/LeafAI/securl/internal/totp"
 )
 
 func TestDefaults(t *testing.T) {

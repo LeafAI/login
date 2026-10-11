@@ -11,11 +11,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/LeafAI/login/internal/config"
-	"github.com/LeafAI/login/internal/flow"
-	"github.com/LeafAI/login/internal/ratelimit"
-	"github.com/LeafAI/login/internal/session"
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/flow"
+	"github.com/LeafAI/securl/internal/ratelimit"
+	"github.com/LeafAI/securl/internal/session"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 func baseOf(raw string) (*url.URL, *ToolError) {

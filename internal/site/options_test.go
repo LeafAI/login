@@ -3,10 +3,10 @@ package site_test
 import (
 	"testing"
 
-	"github.com/LeafAI/login/internal/site"
-	_ "github.com/LeafAI/login/internal/site/gitlab"
-	_ "github.com/LeafAI/login/internal/site/kubesphere"
-	_ "github.com/LeafAI/login/internal/site/noauth"
+	"github.com/LeafAI/securl/internal/site"
+	_ "github.com/LeafAI/securl/internal/site/gitlab"
+	_ "github.com/LeafAI/securl/internal/site/kubesphere"
+	_ "github.com/LeafAI/securl/internal/site/noauth"
 )
 
 func TestOptionValidate(t *testing.T) {

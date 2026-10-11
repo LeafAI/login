@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LeafAI/login/internal/configedit"
-	"github.com/LeafAI/login/internal/mcpserver"
-	"github.com/LeafAI/login/internal/site"
+	"github.com/LeafAI/securl/internal/configedit"
+	"github.com/LeafAI/securl/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/site"
 )
 
 func cmdSite(env Env, args []string) error {

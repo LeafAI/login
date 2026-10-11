@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeafAI/login/internal/totp"
+	"github.com/LeafAI/securl/internal/totp"
 )
 
 var fixedNow = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)

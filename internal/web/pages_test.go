@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/api"
-	"github.com/LeafAI/login/internal/browsertest"
-	"github.com/LeafAI/login/internal/web"
+	"github.com/LeafAI/securl/internal/api"
+	"github.com/LeafAI/securl/internal/browsertest"
+	"github.com/LeafAI/securl/internal/web"
 )
 
 func buildSite(t *testing.T) string {

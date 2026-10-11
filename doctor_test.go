@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeafAI/login/internal/totp"
+	"github.com/LeafAI/securl/internal/totp"
 )
 
 // capture runs fn and returns what it printed to stdout.

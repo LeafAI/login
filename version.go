@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"runtime/debug"
 
-	"github.com/LeafAI/login/internal/mcpserver"
+	"github.com/LeafAI/securl/internal/mcpserver"
 )
 
 // versionLine describes this build: the release version (set with -ldflags, see mcpserver.Version),
