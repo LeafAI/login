@@ -64,7 +64,7 @@ func run(t *testing.T, m *Manager) Result {
 	select {
 	case <-f.Done():
 		return f.Result()
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("flow did not finish")
 		return Result{}
 	}
@@ -107,7 +107,7 @@ func TestSingleFlightAndCancel(t *testing.T) {
 		if a.Result().Err == nil {
 			t.Error("cancelled flow should fail")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("cancel did not end the flow")
 	}
 }
@@ -202,15 +202,20 @@ func (r *recNotifier) all() []string {
 	return append([]string(nil), r.texts...)
 }
 
+// waitFor polls cond until it holds. The limit is long because it only has to be longer than the slowest machine: it
+// returns the moment cond holds, so a fast machine never waits for it. Three seconds was not enough on a loaded CI runner
+// under -race, where making a key and sealing a link took 3.3 s.
+const waitLimit = 30 * time.Second
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for i := 0; i < 300; i++ {
-		if cond() {
-			return
+	deadline := time.Now().Add(waitLimit)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %s", waitLimit, what)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 func TestTunnelRestartResendsLink(t *testing.T) {
@@ -463,7 +468,7 @@ func TestReplacingDeadRoutesIsBounded(t *testing.T) {
 		if !errors.Is(f.Result().Err, ErrTunnel) {
 			t.Errorf("err = %v", f.Result().Err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("the login must give up after maxTunnelRestarts replacements")
 	}
 	if n := ts.count(); n != maxTunnelRestarts+1 {
@@ -485,7 +490,7 @@ func TestRepeatedDeadRoutesEndTheLoginWithATunnelError(t *testing.T) {
 		if !errors.Is(f.Result().Err, ErrTunnel) {
 			t.Errorf("err = %v", f.Result().Err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("the login must give up when route after route dies")
 	}
 }
@@ -509,7 +514,7 @@ func TestTunnelGivesUpAfterRepeatedDeaths(t *testing.T) {
 		if !errors.Is(f.Result().Err, ErrTunnel) {
 			t.Errorf("err = %v", f.Result().Err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("flow did not give up")
 	}
 }
@@ -643,8 +648,21 @@ func (afterRoundDriver) NeedsLogin() bool    { return true }
 func (d afterRoundDriver) Login(ctx context.Context, _ *url.URL, ask site.Asker, _ *http.Client) (*site.Session, error) {
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go func() { time.Sleep(150 * time.Millisecond); cancel() }() // "the person answered": stop waiting for them
-	ask.Ask(rctx, "login", site.LoginFields)                     // brings the tunnel up and sends the link
+	// "The person answered": stop waiting for them, but only once the round really is waiting. A fixed delay is not that:
+	// making the key and opening the tunnel took longer than 150 ms on a loaded machine, so the round was cancelled before
+	// the link was sent and the login ended with no page to listen, which is a different ending from the one under test.
+	if f, ok := ask.(*Flow); ok {
+		go func() {
+			deadline := time.Now().Add(waitLimit)
+			for f.Snapshot().Phase != "waiting_human" && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			cancel()
+		}()
+	} else {
+		go func() { time.Sleep(150 * time.Millisecond); cancel() }()
+	}
+	ask.Ask(rctx, "login", site.LoginFields) // brings the tunnel up and sends the link
 	if d.result != nil {
 		return nil, d.result
 	}
@@ -688,7 +706,7 @@ func TestEveryEndOfALoginClosesItsTunnel(t *testing.T) {
 			}
 			select {
 			case <-f.Done():
-			case <-time.After(5 * time.Second):
+			case <-time.After(waitLimit):
 				t.Fatal("flow did not finish")
 			}
 			waitFor(t, "the tunnel to be closed", func() bool { return ts.stillOpen() == 0 })
@@ -835,7 +853,7 @@ func TestEveryTunnelDeadMeansNoLinkAndNothingLeftOpen(t *testing.T) {
 	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
 	select {
 	case <-f.Done():
-	case <-time.After(10 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("flow did not finish")
 	}
 	if !errors.Is(f.Result().Err, ErrTunnel) {
@@ -1053,7 +1071,7 @@ func TestAnUnusableUnlockFactorSendsNoLink(t *testing.T) {
 	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
 	select {
 	case <-f.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitLimit):
 		t.Fatal("the flow did not stop")
 	}
 	if f.Result().Err == nil {
