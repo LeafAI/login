@@ -15,7 +15,8 @@ change keeps the previous file as `config.yaml.bak`.
 
 ## 1. What you need
 
-* Go 1.25+ to install: `go install github.com/LeafAI/securl@latest`, or the Docker image (see the README).
+* Go 1.25+ to install: `go install github.com/LeafAI/securl@latest`, or the nightly build (no Go needed; the README
+  shows how to check the download against `SHA1SUMS` / `SHA256SUMS`), or the Docker image.
 * An outbound `ssh` client and network access to at least one tunnel provider (or your own jump server).
 * A DingTalk **custom robot** in the group chat of whoever will type the credentials.
 * Register the server with your MCP client, e.g. `claude mcp add securl -- securl`.

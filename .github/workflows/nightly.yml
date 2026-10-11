@@ -1,0 +1,111 @@
+name: nightly
+# Builds securl for every supported platform each night and publishes the archives, with SHA1SUMS and SHA256SUMS, as the
+# one release tagged `nightly`, so that a machine without a Go toolchain can install it. There are no other releases: the
+# release and its tag are replaced by the next build.
+#
+# Only `master` is ever published. A pull request that touches this workflow, or a manual run of another branch, builds
+# and verifies everything and uploads the files as a workflow artifact without publishing.
+#
+# Downloads: https://github.com/LeafAI/securl/releases/download/nightly/<file>
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  pull_request:
+    paths:
+      - ".github/workflows/nightly.yml"
+      - "scripts/release.sh"
+      - "scripts/publish-nightly.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The version is made here from the date and the commit, never from a branch or tag name, which a person chooses.
+      - name: Decide what to build
+        id: decide
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          version="nightly-$(date -u +%Y%m%d)-${SHA:0:7}"
+          publish=false
+          if [ "$REF" = "refs/heads/master" ] && { [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; }; then
+            publish=true
+          fi
+          # A night with no new commit on master does not replace the release: its date would change and nothing else.
+          # A manual run always does, so that a person can refresh it.
+          if [ "$publish" = true ] && [ "$EVENT" = "schedule" ]; then
+            current="$(gh api "repos/${REPO}/git/ref/tags/nightly" --jq '.object.sha' 2>/dev/null || true)"
+            if [ "$current" = "$SHA" ]; then
+              publish=skip
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "building $version, publish=$publish"
+      - name: Test
+        if: steps.decide.outputs.publish != 'skip'
+        run: go test ./...
+      - name: Build, package and checksum
+        if: steps.decide.outputs.publish != 'skip'
+        env:
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: scripts/release.sh dist "$VERSION"
+      - name: Verify the checksums the way a user will
+        if: steps.decide.outputs.publish != 'skip'
+        working-directory: dist
+        run: |
+          sha1sum --check --strict SHA1SUMS
+          sha256sum --check --strict SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: steps.decide.outputs.publish != 'skip'
+        with:
+          name: securl-nightly
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    if: needs.build.outputs.publish == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The scripts are taken from the commit that was built, so what publishes is what was tested.
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: securl-nightly
+          path: dist
+      - name: Check again before publishing
+        working-directory: dist
+        run: |
+          sha1sum --check --strict SHA1SUMS
+          sha256sum --check --strict SHA256SUMS
+      - name: Replace the nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: scripts/publish-nightly.sh dist "$COMMIT" "$VERSION" "$REPO"
