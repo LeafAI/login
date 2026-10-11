@@ -236,6 +236,260 @@ func TestTunnelRestartResendsLink(t *testing.T) {
 	m.Close()
 }
 
+// routedTunnels hands out tunnels whose ssh process stays alive while their public route can be switched off, as a free
+// provider does when it drops a name: the address then answers 502 itself instead of reaching this server.
+type routedTunnels struct {
+	srv *httptest.Server
+
+	mu       sync.Mutex
+	started  []*routedTunnel
+	dead     map[string]bool
+	allDead  bool
+	failOnce map[string]int
+	scripts  map[string][]bool
+}
+
+type routedTunnel struct {
+	name string
+	url  string
+	done chan struct{}
+	once sync.Once
+}
+
+func (r *routedTunnel) PublicURL() string     { return r.url }
+func (r *routedTunnel) Done() <-chan struct{} { return r.done }
+func (r *routedTunnel) Close()                { r.once.Do(func() { close(r.done) }) }
+func (r *routedTunnel) closed() bool {
+	select {
+	case <-r.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func newRoutedTunnels(t *testing.T) *routedTunnels {
+	t.Helper()
+	rt := &routedTunnels{dead: map[string]bool{}, failOnce: map[string]int{}, scripts: map[string][]bool{}}
+	rt.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)[0]
+		rt.mu.Lock()
+		down := rt.dead[name] || rt.allDead
+		if rt.failOnce[name] > 0 {
+			rt.failOnce[name]--
+			down = true
+		}
+		if sc := rt.scripts[name]; len(sc) > 0 {
+			down = down || sc[0]
+			rt.scripts[name] = sc[1:]
+		}
+		rt.mu.Unlock()
+		if down {
+			http.Error(w, "no tunnel", http.StatusBadGateway)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(rt.srv.Close)
+	return rt
+}
+
+func (rt *routedTunnels) Start(context.Context, int) (Tunnel, error) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	n := fmt.Sprintf("t%d", len(rt.started))
+	tn := &routedTunnel{name: n, url: rt.srv.URL + "/" + n, done: make(chan struct{})}
+	rt.started = append(rt.started, tn)
+	return tn, nil
+}
+
+func (rt *routedTunnels) count() int { rt.mu.Lock(); defer rt.mu.Unlock(); return len(rt.started) }
+func (rt *routedTunnels) kill(name string) {
+	rt.mu.Lock()
+	rt.dead[name] = true
+	rt.mu.Unlock()
+}
+
+// killAll drops every route, those already open and those opened from now on: the provider is down. A test that has to
+// see the login give up uses this, because killing the routes one by one races with the check that a new tunnel
+// carries traffic.
+func (rt *routedTunnels) killAll() {
+	rt.mu.Lock()
+	rt.allDead = true
+	rt.mu.Unlock()
+}
+func (rt *routedTunnels) failNext(name string, n int) {
+	rt.mu.Lock()
+	rt.failOnce[name] = n
+	rt.mu.Unlock()
+}
+
+// script makes the next checks of a tunnel answer as listed: true is a failure, false a success. Once the list is used
+// up the tunnel answers normally.
+func (rt *routedTunnels) script(name string, outcomes ...bool) {
+	rt.mu.Lock()
+	rt.scripts[name] = outcomes
+	rt.mu.Unlock()
+}
+func (rt *routedTunnels) first() *routedTunnel {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.started[0]
+}
+
+func probingManager(t *testing.T, n Notifier, ts TunnelStarter) *Manager {
+	return NewManager(Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: n, Tunnels: ts,
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond, ProbeEvery: 10 * time.Millisecond})
+}
+
+// The ssh process of a tunnel can stay alive after the provider has dropped the public name. The person's link then
+// answers 502 and nothing in this program notices unless it keeps asking the address. While a person has not answered,
+// the tunnel is checked again and again; a dead route is replaced and the person gets a new link for the same round.
+func TestADeadRouteIsReplacedWhileThePersonHasNotAnswered(t *testing.T) {
+	ts := newRoutedTunnels(t)
+	rec := &recNotifier{}
+	m := probingManager(t, rec, ts)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+
+	ts.kill("t0") // the ssh process is still running; only the route is gone
+	waitFor(t, "replacement message", func() bool { return len(rec.all()) == 2 })
+	msgs := rec.all()
+	if !strings.Contains(msgs[1], "replaces the previous one") || strings.Contains(msgs[0], "replaces") {
+		t.Errorf("messages:\n%s\n---\n%s", msgs[0], msgs[1])
+	}
+	if !strings.Contains(msgs[1], "/t1") && !strings.Contains(msgs[1], "%2Ft1") {
+		t.Errorf("the new link must carry the new tunnel's address:\n%s", msgs[1])
+	}
+	if !ts.first().closed() {
+		t.Error("the dead tunnel must be closed, not left running")
+	}
+	if f.Snapshot().Phase != "waiting_human" {
+		t.Errorf("phase %q", f.Snapshot().Phase)
+	}
+}
+
+// After a replacement the check follows the NEW tunnel. Checking the old address again would find it dead for ever, and
+// every replacement would be replaced in turn until the login gave up.
+func TestAfterAReplacementTheNewTunnelIsTheOneThatIsChecked(t *testing.T) {
+	ts := newRoutedTunnels(t)
+	rec := &recNotifier{}
+	m := probingManager(t, rec, ts)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+	ts.kill("t0")
+	waitFor(t, "replacement message", func() bool { return len(rec.all()) == 2 })
+	time.Sleep(300 * time.Millisecond) // many checks of the healthy replacement
+	if ts.count() != 2 || len(rec.all()) != 2 {
+		t.Errorf("tunnels=%d messages=%d: the healthy replacement must be left alone", ts.count(), len(rec.all()))
+	}
+	select {
+	case <-f.Done():
+		t.Errorf("the login ended: %v", f.Result().Err)
+	default:
+	}
+}
+
+func TestAHealthyTunnelIsNeverReplaced(t *testing.T) {
+	ts := newRoutedTunnels(t)
+	rec := &recNotifier{}
+	m := probingManager(t, rec, ts)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+	time.Sleep(300 * time.Millisecond) // dozens of checks
+	if ts.count() != 1 || len(rec.all()) != 1 {
+		t.Errorf("tunnels=%d messages=%d: a tunnel that answers must be left alone", ts.count(), len(rec.all()))
+	}
+}
+
+// One failed check is a network hiccup, not a dead route: replacing the tunnel would send the person a second message
+// and make the link they are about to open stale.
+func TestOneFailedCheckDoesNotReplaceTheTunnel(t *testing.T) {
+	ts := newRoutedTunnels(t)
+	rec := &recNotifier{}
+	m := probingManager(t, rec, ts)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+	ts.failNext("t0", 1)
+	time.Sleep(300 * time.Millisecond)
+	if ts.count() != 1 || len(rec.all()) != 1 {
+		t.Errorf("tunnels=%d messages=%d after a single failed check", ts.count(), len(rec.all()))
+	}
+}
+
+// Misses must be consecutive. A tunnel that fails now and then, but answers in between, is working: counting the
+// failures over its whole life would replace every tunnel sooner or later.
+func TestFailedChecksSeparatedByAnAnswerDoNotAddUp(t *testing.T) {
+	ts := newRoutedTunnels(t)
+	rec := &recNotifier{}
+	m := probingManager(t, rec, ts)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+	ts.script("t0", true, false, true, false, true, false, true, false)
+	time.Sleep(400 * time.Millisecond)
+	if ts.count() != 1 || len(rec.all()) != 1 {
+		t.Errorf("tunnels=%d messages=%d: a miss, an answer, a miss is not a dead route", ts.count(), len(rec.all()))
+	}
+}
+
+// A dead route is replaced at most maxTunnelRestarts times, together with the restarts after an ssh exit: the bound is
+// what stops a provider that is down from making this program open tunnels for as long as the link lives. The fake
+// tunnels come up healthy and die one after another, so each replacement passes its first check.
+func TestReplacingDeadRoutesIsBounded(t *testing.T) {
+	ts := newRoutedTunnels(t)
+	rec := &recNotifier{}
+	m := probingManager(t, rec, ts)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	for i := 0; i <= maxTunnelRestarts; i++ {
+		i := i
+		waitFor(t, "tunnel start", func() bool { return ts.count() > i })
+		waitFor(t, "its link", func() bool { return len(rec.all()) > i })
+		ts.kill(fmt.Sprintf("t%d", i))
+	}
+	select {
+	case <-f.Done():
+		if !errors.Is(f.Result().Err, ErrTunnel) {
+			t.Errorf("err = %v", f.Result().Err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the login must give up after maxTunnelRestarts replacements")
+	}
+	if n := ts.count(); n != maxTunnelRestarts+1 {
+		t.Errorf("%d tunnels were opened, want exactly %d", n, maxTunnelRestarts+1)
+	}
+}
+
+func TestRepeatedDeadRoutesEndTheLoginWithATunnelError(t *testing.T) {
+	ts := newRoutedTunnels(t)
+	rec := &recNotifier{}
+	m := probingManager(t, rec, ts)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	f := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { return len(rec.all()) == 1 })
+	ts.killAll()
+	select {
+	case <-f.Done():
+		if !errors.Is(f.Result().Err, ErrTunnel) {
+			t.Errorf("err = %v", f.Result().Err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the login must give up when route after route dies")
+	}
+}
+
 func TestTunnelGivesUpAfterRepeatedDeaths(t *testing.T) {
 	ts := &dyingTunnels{}
 	rec := &recNotifier{}

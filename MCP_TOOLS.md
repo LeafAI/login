@@ -146,7 +146,8 @@ share one flow (same `login_id`).
 
 Send an HTTP request to a site that has a session. The gateway puts the session's cookies and tokens into the request and
 removes them from the answer, so the agent neither sends nor receives a credential. It never opens a session by itself:
-without one it answers `no_session` (asking a person is `session_open`'s job).
+without one it answers `no_session` (asking a person is `session_open`'s job). A site that needs no login at all (SkyWalking)
+has no session to look for: the request goes out as it is, with no credential added.
 
 Input
 ```jsonc

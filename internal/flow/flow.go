@@ -94,6 +94,10 @@ type Config struct {
 	FlushDelay time.Duration
 	// ProbeTimeout bounds the check that a new tunnel really carries traffic before its link is sent (default 8 s).
 	ProbeTimeout time.Duration
+	// ProbeEvery is how often a tunnel is checked again while a person has not answered (default 20 s). A free
+	// provider can drop a public name while the ssh process keeps running, so "ssh is alive" does not mean "the link
+	// works".
+	ProbeEvery time.Duration
 	// OnTunnel, when set, is told which provider carries a flow's tunnel (for the audit log).
 	OnTunnel func(f *Flow, provider string, attempts int)
 	Log      func(format string, args ...any)
@@ -128,6 +132,9 @@ func NewManager(cfg Config) *Manager {
 	}
 	if cfg.ProbeTimeout == 0 {
 		cfg.ProbeTimeout = 8 * time.Second
+	}
+	if cfg.ProbeEvery == 0 {
+		cfg.ProbeEvery = 20 * time.Second
 	}
 	return &Manager{cfg: cfg, flows: map[string]*Flow{}, byBase: map[string]*Flow{}}
 }
@@ -386,6 +393,10 @@ func (f *Flow) probeTunnel(ctx context.Context, publicURL string) error {
 
 const maxTunnelRestarts = 2
 
+// routeMissesBeforeReplacing is how many checks in a row must fail before a tunnel whose ssh process is still running
+// is replaced.
+const routeMissesBeforeReplacing = 2
+
 // tunnelDown reports whether the current tunnel process has exited.
 func (f *Flow) tunnelDown() bool {
 	select {
@@ -485,8 +496,33 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 	}
 	ch := make(chan res, 1)
 	go func() { s, err := round.Wait(wctx); ch <- res{s, err} }()
+	check := time.NewTicker(f.m.cfg.ProbeEvery)
+	defer check.Stop()
+	missed := 0
 	for {
 		select {
+		case <-check.C:
+			// The ssh process can be alive while the provider has dropped the public name: the person's link would
+			// answer 502 and nothing would notice. Two misses in a row (one is a hiccup) replace the tunnel.
+			if f.probeTunnel(wctx, f.tn.PublicURL()) == nil {
+				missed = 0
+				continue
+			}
+			if missed++; missed < routeMissesBeforeReplacing {
+				continue
+			}
+			missed = 0
+			if restarts >= maxTunnelRestarts {
+				return nil, fmt.Errorf("%w: the tunnel stopped carrying traffic %d times", ErrTunnel, restarts+1)
+			}
+			restarts++
+			f.logf("tunnel route is gone (the ssh process is still running); replacing it (%d/%d)", restarts, maxTunnelRestarts)
+			if err := f.restartTunnel(ctx); err != nil {
+				return nil, err
+			}
+			if err := send("The tunnel connection dropped and was re-created. This link replaces the previous one."); err != nil {
+				return nil, err
+			}
 		case r := <-ch:
 			if r.err != nil {
 				if ctx.Err() != nil {

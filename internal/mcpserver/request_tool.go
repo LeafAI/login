@@ -36,15 +36,12 @@ func (s *Server) request(ctx context.Context, _ *mcp.CallToolRequest, in Request
 	if terr != nil {
 		return nil, terr
 	}
-	// A request only ever uses a session that exists: asking a person to type a password is session_open's job.
-	e, ok := k.cache.GetWithin(ctx, base, s.hc, sessionFreshness)
-	if !ok {
-		e := errf("no_session", false, "there is no valid session for %s", base.Host)
-		e.Hint = noSessionHint
-		return nil, e
+	siteName, sess, terr := s.sessionFor(ctx, k, base)
+	if terr != nil {
+		return nil, terr
 	}
 	px := &proxy.Proxy{HC: s.hc, MaxResponseBytes: in.MaxResponseBytes}
-	res, err := px.Do(ctx, e.Session, proxy.Request{
+	res, err := px.Do(ctx, sess, proxy.Request{
 		Base: base, Method: in.Method, Path: in.Path, Query: multiValues(in.Query), Headers: in.Headers,
 		JSON: in.JSON, Form: multiValues(in.Form), Text: in.Text, Base64: in.Base64,
 		FollowRedirects: in.FollowRedirects, Timeout: time.Duration(in.TimeoutSeconds) * time.Second,
@@ -55,7 +52,7 @@ func (s *Server) request(ctx context.Context, _ *mcp.CallToolRequest, in Request
 	if res.NewSession != nil {
 		k.cache.Update(base, res.NewSession)
 	}
-	s.audit.Record(audit.Event{Event: "request", Site: e.Site, Host: base.Host, Method: in.Method, Path: res.FinalPathOr(in.Path),
+	s.audit.Record(audit.Event{Event: "request", Site: siteName, Host: base.Host, Method: in.Method, Path: res.FinalPathOr(in.Path),
 		Status: res.Status, Bytes: res.TotalBytes})
 	out := RequestOutput{Status: res.Status, Headers: res.Headers, Body: res.Body, BodyIsBase64: res.BodyIsBase64,
 		Truncated: res.Truncated, TotalBytes: res.TotalBytes, Redactions: res.Redactions, Withheld: res.Withheld, FinalPath: res.FinalPath}
@@ -63,6 +60,22 @@ func (s *Server) request(ctx context.Context, _ *mcp.CallToolRequest, in Request
 		out.Hint = requestExpiredHint
 	}
 	return out, nil
+}
+
+// sessionFor returns the session a request goes out with. A request only ever uses a session that exists: asking a
+// person to type a password is session_open's job. A site that has no login at all has nothing to look up, and gets an
+// empty session, so that no credential is added.
+func (s *Server) sessionFor(ctx context.Context, k *core, base *url.URL) (string, *site.Session, *ToolError) {
+	if d, err := site.Resolve(s.alias(base), base); err == nil && !d.NeedsLogin() {
+		return d.Name(), &site.Session{}, nil
+	}
+	e, ok := k.cache.GetWithin(ctx, base, s.hc, sessionFreshness)
+	if !ok {
+		te := errf("no_session", false, "there is no valid session for %s", base.Host)
+		te.Hint = noSessionHint
+		return "", nil, te
+	}
+	return e.Site, e.Session, nil
 }
 
 // siteBase applies the same rules as every other tool to the URL an agent names: a valid URL, a host the policy allows

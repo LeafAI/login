@@ -88,7 +88,7 @@ func siteAdd(env Env, args []string) error {
 		return err
 	}
 	p.Say("\nNo password is needed here: the person is asked when an agent first logs in.")
-	p.Say("Check what login will do with this site (no credentials sent): securl doctor -site %s", u.Scheme+"://"+u.Host)
+	p.Say("Check what securl will do with this site (no credentials sent): securl doctor -site %s", u.Scheme+"://"+u.Host)
 	return nil
 }
 

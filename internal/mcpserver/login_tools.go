@@ -304,7 +304,7 @@ func checkHost(cfg *config.Config, base *url.URL) *ToolError {
 		return e
 	}
 	if !cfg.Security.AllowLocalAddresses && netguard.LocalHost(base.Host) {
-		e := errf("host_not_allowed", false, "%s is a local address; login does not connect to this machine's own addresses unless security.allow_local_addresses is set", base.Host)
+		e := errf("host_not_allowed", false, "%s is a local address; securl does not connect to this machine's own addresses unless security.allow_local_addresses is set", base.Host)
 		e.Hint = "Ask the user to set security.allow_local_addresses in the securl config if this is intended; do not try other spellings of the address."
 		return e
 	}

@@ -199,7 +199,7 @@ func doctorVault(cfg *config.Config, report func(bool, string, string)) vault.St
 	state := vault.New(cfg.Vault.Dir).State()
 	switch state {
 	case vault.NotInitialized:
-		report(false, "vault", "not initialized: run `securl vault init` (every secret login keeps lives in the vault, and a server cannot log in to anything without it)")
+		report(false, "vault", "not initialized: run `securl vault init` (every secret securl keeps lives in the vault, and a server cannot log in to anything without it)")
 	case vault.Locked:
 		report(true, "vault", "locked at "+cfg.Vault.Dir+" (normal: a running server is opened with the vault_unlock tool)")
 	default:
