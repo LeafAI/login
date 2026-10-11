@@ -742,3 +742,29 @@ func TestReadmeDownloadNamesAreTheOnesTheNightlyPublishes(t *testing.T) {
 		}
 	}
 }
+
+// The README tells a Go developer to `go install` and everyone else to download the nightly. Both have to be there, the
+// install for Go first because a developer reads from the top, and neither may claim the other's requirement.
+func TestReadmeGivesBothWaysToGetTheBinary(t *testing.T) {
+	b, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(b)
+	goAt := strings.Index(readme, "go install github.com/LeafAI/securl@latest")
+	dlAt := strings.Index(readme, "releases/download/nightly/securl_<os>_<arch>.tar.gz")
+	if goAt < 0 || dlAt < 0 {
+		t.Fatalf("the README must show go install (at %d) and the nightly download (at %d)", goAt, dlAt)
+	}
+	flat := strings.Join(strings.Fields(readme), " ")
+	for _, want := range []string{"Go 1.25 or newer, for a Go developer", "No Go toolchain", "the repository has no release tags"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("the README must say %q", want)
+		}
+	}
+	// The download is not presented as the fallback of a Go install, and `go install` as the way for a Go developer is not
+	// presented as a pinned commit only: `@latest` is shown.
+	if strings.Contains(flat, "if you need a known version") {
+		t.Error("go install is the way for a Go developer, not only a way to pin a version")
+	}
+}

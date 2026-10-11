@@ -15,14 +15,53 @@ not exist, and an extra argument is refused.
 
 ## 1. Install
 
-You need Go 1.25 or newer and an outbound `ssh` client.
+You need an outbound `ssh` client (tunnels use it). Then pick the way that fits the machine: run `go version`.
+
+- **No Go, or Go older than 1.25: download the nightly build** (a prebuilt binary, section 1a). Most machines that only
+  use securl are in this group.
+- **Go 1.25 or newer, for a developer who already builds Go programs: `go install` directly** (section 1b).
+
+### 1a. No Go toolchain: the nightly build
+
+```
+# macOS / Linux: <os> is darwin or linux, <arch> is arm64 or amd64
+curl -LO https://github.com/LeafAI/securl/releases/download/nightly/securl_<os>_<arch>.tar.gz
+curl -LO https://github.com/LeafAI/securl/releases/download/nightly/SHA256SUMS
+shasum -a 256 --ignore-missing -c SHA256SUMS      # sha256sum on Linux; it must print OK
+tar -xzf securl_<os>_<arch>.tar.gz
+install -m 0755 securl_*_<os>_<arch>/securl ~/.local/bin/securl
+securl version                                    # nightly-<date>-<commit>
+```
+
+- Do not skip the check. If it does not print `OK` for your file, delete the download and do not run it.
+- `--ignore-missing` is needed because you downloaded one archive and `SHA256SUMS` lists all of them.
+- Use `uname -sm` to find the platform (`Darwin arm64` is `darwin` and `arm64`, `x86_64` is `amd64`, `aarch64` is `arm64`).
+- Windows gets a `.zip` (`securl_windows_<arch>.zip`): check it with `certutil -hashfile securl_windows_<arch>.zip SHA256`
+  and compare the line in `SHA256SUMS`, then unzip and put `securl.exe` on `PATH`.
+- `SHA1SUMS` is published too. SHA-1 collisions can be made, so it only catches a damaged download. Rely on SHA-256 against
+  tampering.
+- The address is `releases/download/nightly`. GitHub's "latest release" link does not point at it, because the nightly is
+  a pre-release.
+- The nightly is the newest `master`, built each night when it has changed. It is not a tested release.
+
+### 1b. Go 1.25 or newer: go install
 
 ```
 go install github.com/LeafAI/securl@latest
-securl version
+securl version                                    # securl 0.1.0 (it builds master as it is, with no nightly name)
 ```
 
-The binary is `$(go env GOPATH)/bin/securl` (usually `~/go/bin/securl`); make sure that directory is on `PATH`.
+The binary is `$(go env GOPATH)/bin/securl` (or `$GOBIN`); make sure that directory is on `PATH`. `@latest` is the newest
+`master`, because the repository has no release tags. For a fixed version, give a commit: `go install
+github.com/LeafAI/securl@<commit>`. If it answers `no matching versions` right after a push, the module proxy has not seen
+the new commit yet: run it again in a minute, or use `GOPROXY=direct`.
+
+### Both ways
+
+- Make sure the directory the binary went into is on `PATH`, and that it is the only copy: if `securl version` is not what
+  you just installed, an older copy comes first. `command -v securl` shows which one runs; remove the other (a `go install`
+  copy is in `~/go/bin`, a download in `~/.local/bin`) or reorder `PATH`. A download says `nightly-<date>-<commit>`; a
+  `go install` says `0.1.0`.
 
 Register it with the MCP client (it speaks MCP over stdio):
 
@@ -32,21 +71,32 @@ claude mcp add securl -- securl
 
 For any other client, add a stdio server whose command is `securl`. To use another config file, pass `-config <file>`.
 
-Docker is an alternative: see the README ("Docker"). It keeps config and the vault in a volume.
+Docker is another alternative: see the README ("Docker"). It keeps config and the vault in a volume.
 
 ## 2. Update
 
+Update the way you installed, so that the new binary replaces the old one and is the only copy.
+
+- **Downloaded (1a):** run the same commands again, including the check.
+
 ```
-go install github.com/LeafAI/securl@latest
-securl version
+curl -LO https://github.com/LeafAI/securl/releases/download/nightly/securl_<os>_<arch>.tar.gz
+curl -LO https://github.com/LeafAI/securl/releases/download/nightly/SHA256SUMS
+shasum -a 256 --ignore-missing -c SHA256SUMS      # it must print OK
+tar -xzf securl_<os>_<arch>.tar.gz
+install -m 0755 securl_*_<os>_<arch>/securl ~/.local/bin/securl
+securl version                                    # the new nightly-<date>-<commit>
 ```
 
-Then restart the MCP server process (the client or gateway starts it again). **A restart locks the vault**: the user
-types the passphrase once more (section 4). Sessions are kept in the vault, so logins survive the restart.
+- **Go (1b):** run `go install github.com/LeafAI/securl@latest` again. It does not change `securl version` (`0.1.0`), so to
+  know it moved, look at the build: in `go version -m $(command -v securl)` the `mod` line ends with the commit it was
+  built from (`v0.0.0-<time>-<commit>`).
 
-A new release can change the login page (it is published separately, from `master`). If logins start failing right after
-an update, check that the page is current: `securl doctor` prints the page address, and the release notes say when the
-page and the binary must be updated together.
+Then restart the MCP server process (the client or gateway starts it again). **A restart locks the vault**: the user types
+the passphrase once more (section 4). Sessions are kept in the vault, so logins survive the restart.
+
+A new build can change the login page (it is published separately, from `master`). If logins start failing right after an
+update, check that the page is current: `securl doctor` prints the page address.
 
 ## 3. Set up (once)
 

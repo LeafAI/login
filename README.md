@@ -8,12 +8,18 @@ Secrets are kept in an encrypted vault that is locked at start and opened by the
 (`vault_unlock`). The agent then uses a site through `request`: securl adds the credentials to the request and removes
 them from the answer, so the agent never holds a cookie, a token or a password.
 
+First get the `securl` binary. Pick the way that fits the machine (`go version` tells you):
+
+**Go 1.25 or newer, for a Go developer:** install it directly.
+
 ```
 go install github.com/LeafAI/securl@latest
-claude mcp add securl -- securl          # or add "securl" to any MCP client's server list
 ```
 
-No Go toolchain? Download the nightly build for your platform, check it, and put `securl` on your `PATH`. There is one
+`@latest` is the newest `master`; the repository has no release tags. For a fixed version give a commit:
+`go install github.com/LeafAI/securl@<commit>`.
+
+**No Go toolchain:** download the nightly build for your platform, check it, and put it on your `PATH`. There is one
 release, tagged `nightly`, built from `master` and replaced every night when `master` has changed
 ([releases](https://github.com/LeafAI/securl/releases/tag/nightly)):
 
@@ -33,7 +39,13 @@ command above never goes stale. The release is a pre-release, so GitHub's "lates
 SHA-256 against tampering, because SHA-1 collisions can be made. Windows gets a `.zip`: check it with
 `certutil -hashfile securl_windows_<arch>.zip SHA256` and compare the line in `SHA256SUMS`. `--ignore-missing` is needed
 because you downloaded one archive and the file lists all of them. The nightly is a build of the newest `master`, not a
-tested release: pin a commit with `go install github.com/LeafAI/securl@<commit>` if you need a known version.
+tested release.
+
+Then register it with your MCP client:
+
+```
+claude mcp add securl -- securl          # or add "securl" to any MCP client's server list
+```
 
 An agent skill that teaches install, update, setup and use is in [`skills/securl/SKILL.md`](skills/securl/SKILL.md). Copy
 the `skills/securl` directory into your client's skills directory (for Claude Code: `~/.claude/skills/securl/`).
@@ -59,7 +71,7 @@ carries only ciphertext. See `DESIGN.md` (architecture, threat model) and `MCP_T
 
 ![securl: production deployment architecture](docs/architecture.svg)
 
-`securl` runs as one process next to the agent (`go install`, or the Docker image) and talks to the agent over stdio.
+`securl` runs as one process next to the agent (the nightly binary, `go install`, or the Docker image) and talks to the agent over stdio.
 Its config, key pool, encrypted sessions and audit log live in one private directory (a volume in Docker).
 Nothing listens on a public port: the only inbound path is the `ssh -R` tunnel that `login` itself opens, and it
 exists only while a person is being asked.
