@@ -10,7 +10,7 @@ import (
 // The documents are read by people configuring allow-lists and by agents' authors: a tool name that is wrong in them is
 // a bug. These tests read the real tool list from the source and hold the documents to it.
 
-var documents = []string{"README.md", "DESIGN.md", "MCP_TOOLS.md", "docs/OPERATING.md", "docs/ROADMAP.md"}
+var documents = []string{"README.md", "DESIGN.md", "MCP_TOOLS.md", "docs/OPERATING.md", "docs/ROADMAP.md", "skills/securl/SKILL.md"}
 
 func realTools(t *testing.T) map[string]bool {
 	t.Helper()
