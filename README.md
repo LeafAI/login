@@ -34,7 +34,9 @@ SHA-256 against tampering, because SHA-1 collisions can be made. Windows gets a 
 `certutil -hashfile securl_windows_<arch>.zip SHA256` and compare the line in `SHA256SUMS`. `--ignore-missing` is needed
 because you downloaded one archive and the file lists all of them. The nightly is a build of the newest `master`, not a
 tested release: pin a commit with `go install github.com/LeafAI/securl@<commit>` if you need a known version.
-because you downloaded one archive and the file lists all of them. A release is made by pushing a tag named `v*`.
+
+An agent skill that teaches install, update, setup and use is in [`skills/securl/SKILL.md`](skills/securl/SKILL.md). Copy
+the `skills/securl` directory into your client's skills directory (for Claude Code: `~/.claude/skills/securl/`).
 
 
 ## How a login works
