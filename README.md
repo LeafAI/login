@@ -13,6 +13,29 @@ go install github.com/LeafAI/securl@latest
 claude mcp add securl -- securl          # or add "securl" to any MCP client's server list
 ```
 
+No Go toolchain? Download the nightly build for your platform, check it, and put `securl` on your `PATH`. There is one
+release, tagged `nightly`, built from `master` and replaced every night when `master` has changed
+([releases](https://github.com/LeafAI/securl/releases/tag/nightly)):
+
+```
+# macOS / Linux: <os> is darwin or linux, <arch> is arm64 or amd64
+curl -LO https://github.com/LeafAI/securl/releases/download/nightly/securl_<os>_<arch>.tar.gz
+curl -LO https://github.com/LeafAI/securl/releases/download/nightly/SHA256SUMS
+shasum -a 256 --ignore-missing -c SHA256SUMS            # sha256sum on Linux; must print OK
+tar -xzf securl_<os>_<arch>.tar.gz
+install -m 0755 securl_*_<os>_<arch>/securl ~/.local/bin/securl
+securl version                                          # nightly-<date>-<commit>
+```
+
+Every archive is published twice, as `securl_<version>_<os>_<arch>` and as `securl_<os>_<arch>` (the same file), so the
+command above never goes stale. The release is a pre-release, so GitHub's "latest" link does not point at it: use the
+`download/nightly` address. Each build lists `SHA1SUMS` and `SHA256SUMS`. Both catch a damaged download; rely on
+SHA-256 against tampering, because SHA-1 collisions can be made. Windows gets a `.zip`: check it with
+`certutil -hashfile securl_windows_<arch>.zip SHA256` and compare the line in `SHA256SUMS`. `--ignore-missing` is needed
+because you downloaded one archive and the file lists all of them. The nightly is a build of the newest `master`, not a
+tested release: pin a commit with `go install github.com/LeafAI/securl@<commit>` if you need a known version.
+because you downloaded one archive and the file lists all of them. A release is made by pushing a tag named `v*`.
+
 
 ## How a login works
 
