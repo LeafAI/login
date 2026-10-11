@@ -137,9 +137,89 @@ func TestSkillSaysWhatTheAgentMustNeverDo(t *testing.T) {
 	}
 }
 
-// `go install` is case sensitive and the module path is the repository's: a typo here is the first command a new user
-// types, and it fails.
-func TestSkillInstallsTheRealModule(t *testing.T) {
+// The first thing a person does is install, and most of them have no Go toolchain, so the skill installs the nightly
+// build. Every address and file name in it must be the one the nightly workflow publishes and the README documents, or the
+// first command is a 404.
+// section returns the text from the heading that starts with from up to the heading that starts with to. The install and
+// the update teach the same commands, so a check that looked at the whole file would be satisfied by the one that was
+// left right when the other was broken.
+func section(t *testing.T, from, to string) string {
+	t.Helper()
+	s := readSkill(t)
+	i := strings.Index(s, from)
+	j := strings.Index(s, to)
+	if i < 0 || j < i {
+		t.Fatalf("the skill must have %q before %q", from, to)
+	}
+	return s[i:j]
+}
+
+// The two ways to get securl are told apart by the machine, not ranked: a person without Go (or with one older than 1.25)
+// downloads the nightly build, a developer who already builds Go programs runs `go install`. The skill has to say how to
+// tell which one applies, and give each its own complete instructions.
+func installText(t *testing.T) (all, nightly, goInstall string) {
+	t.Helper()
+	all = section(t, "## 1. Install", "## 2. Update")
+	n := strings.Index(all, "### 1a.")
+	g := strings.Index(all, "### 1b.")
+	b := strings.Index(all, "### Both ways")
+	if n < 0 || g < n || b < g {
+		t.Fatal("the Install section must have 1a (the nightly), then 1b (go install), then a Both ways part")
+	}
+	return all, all[n:g], all[g:b]
+}
+
+// The commands a person types to get the nightly, in the order they type them. The install and the update each carry the
+// whole list.
+var nightlyCommands = []string{
+	"curl -LO https://github.com/LeafAI/securl/releases/download/nightly/securl_<os>_<arch>.tar.gz",
+	"curl -LO https://github.com/LeafAI/securl/releases/download/nightly/SHA256SUMS",
+	"shasum -a 256 --ignore-missing -c SHA256SUMS",
+	"tar -xzf securl_<os>_<arch>.tar.gz",
+	"install -m 0755 securl_*_<os>_<arch>/securl ~/.local/bin/securl",
+	"securl version",
+}
+
+func TestInstallTellsYouHowToChooseAndGivesEachWayInFull(t *testing.T) {
+	all, nightly, goInstall := installText(t)
+	flat := strings.Join(strings.Fields(all), " ")
+	// The choice is made by what is on the machine, and `go version` is how to find out.
+	for _, want := range []string{"go version", "No Go", "Go 1.25 or newer", "download the nightly build", "go install"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("the choice between the two ways must mention %q", want)
+		}
+	}
+	// Each way is complete on its own.
+	last := -1
+	for _, cmd := range nightlyCommands {
+		at := strings.Index(nightly, cmd)
+		if at < 0 {
+			t.Errorf("1a must contain the command %q", cmd)
+			continue
+		}
+		if at < last {
+			t.Errorf("1a: %q is out of order", cmd)
+		}
+		last = at
+	}
+	if !strings.Contains(goInstall, "go install github.com/LeafAI/securl@latest") {
+		t.Error("1b must give the developer `go install github.com/LeafAI/securl@latest`: that is the whole install for them")
+	}
+	if strings.Contains(nightly, "go install ") && !strings.Contains(nightly, "go install` copy") {
+		t.Error("1a is for a machine without Go: it must not tell the person to run go install")
+	}
+	// The way that needs Go says so; the way that does not, does not.
+	if strings.Contains(strings.Join(strings.Fields(nightly), " "), "You need Go") {
+		t.Error("the nightly needs no Go toolchain: do not say that it does")
+	}
+	if !strings.Contains(strings.Join(strings.Fields(goInstall), " "), "newest `master`") {
+		t.Error("1b must say that @latest is the newest master, because the repository has no release tags")
+	}
+}
+
+// The Go developer runs the one command on their own machine; it has to be the real module path (case sensitive), and the
+// skill must not push a person without Go towards it.
+func TestGoInstallUsesTheRealModuleAndIsNeverMistakenForTheNightly(t *testing.T) {
 	b, err := os.ReadFile("go.mod")
 	if err != nil {
 		t.Fatal(err)
@@ -149,13 +229,105 @@ func TestSkillInstallsTheRealModule(t *testing.T) {
 		t.Fatal("go.mod has no module line")
 	}
 	s := readSkill(t)
-	if n := strings.Count(s, "go install "+m[1]+"@latest"); n < 2 {
-		t.Errorf("the install and the update must both run `go install %s@latest` (found %d)", m[1], n)
-	}
 	for _, line := range strings.Split(s, "\n") {
 		if strings.HasPrefix(line, "go install ") && !strings.HasPrefix(line, "go install "+m[1]+"@") {
 			t.Errorf("not this module: %s", line)
 		}
+	}
+	if !strings.Contains(s, "go install "+m[1]+"@latest") {
+		t.Errorf("the skill must show `go install %s@latest`", m[1])
+	}
+	_, _, goInstall := installText(t)
+	flat := strings.Join(strings.Fields(goInstall), " ")
+	// What it prints is not what the nightly prints, and a person who has both must be able to tell them apart.
+	for _, want := range []string{"0.1.0", "@<commit>", "GOPROXY=direct"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("1b must mention %q", want)
+		}
+	}
+}
+
+// Two copies of securl on one machine is the usual reason an update "did not work": the other one comes first on PATH. The
+// skill says how to see which one runs, once, for both ways, and what each way's version looks like.
+func TestInstallSaysWhatToDoWhenAnotherCopyComesFirst(t *testing.T) {
+	all, _, _ := installText(t)
+	b := strings.Index(all, "### Both ways")
+	both := strings.Join(strings.Fields(all[b:]), " ")
+	for _, want := range []string{"command -v securl", "~/go/bin", "~/.local/bin", "nightly-<date>-<commit>", "0.1.0"} {
+		if !strings.Contains(both, want) {
+			t.Errorf("the part for both ways must mention %q", want)
+		}
+	}
+}
+
+func TestSkillInstallsTheNightlyBuildAndChecksIt(t *testing.T) {
+	_, nightly, _ := installText(t)
+	flat := strings.Join(strings.Fields(nightly), " ")
+	base := "https://github.com/LeafAI/securl/releases/download/nightly/"
+	for _, want := range []string{
+		base + "securl_<os>_<arch>.tar.gz", // the name that never changes, so the command never goes stale
+		base + "SHA256SUMS",
+		"shasum -a 256 --ignore-missing -c SHA256SUMS", // the check, written so that one downloaded file is enough
+		"install -m 0755",
+		"nightly-<date>-<commit>", // what the version looks like, so a person can tell the install worked
+		"certutil",                // Windows has no shasum
+	} {
+		if !strings.Contains(nightly, want) {
+			t.Errorf("1a must contain %q", want)
+		}
+	}
+	if strings.Contains(readSkill(t), "releases/latest") {
+		t.Error("releases/latest never points at the nightly pre-release: use releases/download/nightly")
+	}
+	// Why the SHA-256 and not the SHA-1 is the one to run: the honest reason, stated where the check is.
+	if !strings.Contains(flat, "SHA1SUMS") || !strings.Contains(flat, "SHA-1 collisions can be made") {
+		t.Error("1a must say why SHA256SUMS is the one to rely on, and that SHA1SUMS only catches a damaged download")
+	}
+	if !strings.Contains(flat, "not a tested release") {
+		t.Error("1a must say that the nightly is the newest master and not a tested release")
+	}
+	// The names must be the ones the workflow and the script produce.
+	script, err := os.ReadFile(releaseScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"securl_${os}_${arch}.", "SHA256SUMS", "SHA1SUMS"} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("the script no longer produces %q, which the skill tells people to download", want)
+		}
+	}
+}
+
+// An update follows the install: the same download again for the one who downloaded, `go install` again for the one who
+// built, and for both a restart that locks the vault. The only release is the nightly, which has no release notes.
+func TestUpdateHasTheSameTwoWaysAndWarnsAboutTheVault(t *testing.T) {
+	update := section(t, "## 2. Update", "## 3. Set up")
+	last := -1
+	for _, cmd := range nightlyCommands {
+		at := strings.Index(update, cmd)
+		if at < 0 {
+			t.Errorf("the Update section must contain the command %q", cmd)
+			continue
+		}
+		if at < last {
+			t.Errorf("Update: %q is out of order", cmd)
+		}
+		last = at
+	}
+	flat := strings.Join(strings.Fields(update), " ")
+	for _, want := range []string{"go install github.com/LeafAI/securl@latest", "go version -m", "locks the vault", "passphrase", "the way you installed"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("the Update section must mention %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(flat), "release notes") {
+		t.Error("there are no release notes: the nightly is the only release")
+	}
+	if strings.Contains(update, "shasum -a 1 ") || strings.Contains(update, "releases/latest") {
+		t.Error("the update must check with SHA-256 and use the nightly address")
+	}
+	if regexp.MustCompile(`securl_v?\d`).MatchString(update) {
+		t.Error("the file name must not carry a version, or the command goes stale")
 	}
 }
 
