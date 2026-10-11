@@ -75,12 +75,12 @@ func (rs *rqSite) count() int { rs.mu.Lock(); defer rs.mu.Unlock(); return len(r
 func withSession(t *testing.T, rs *rqSite, tweak func(*config.Config)) *gateEnv {
 	t.Helper()
 	g := gateServer(t, "open", func(c *config.Config) {
-		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "skywalking"}
+		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "gitlab"}
 		if tweak != nil {
 			tweak(c)
 		}
 	})
-	d, _ := site.Resolve("skywalking", nil)
+	d, _ := site.Resolve("gitlab", nil)
 	base := mustURL(t, rs.URL)
 	g.s.core.cache.Put(base, d, &site.Session{
 		Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}},
@@ -212,7 +212,7 @@ func TestRequestHonoursAllowedHostsAndLocalAddresses(t *testing.T) {
 func TestRequestWithoutASessionSaysSoAndAsksNobody(t *testing.T) {
 	rs := newRqSite(t)
 	g := gateServer(t, "open", func(c *config.Config) {
-		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "skywalking"}
+		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "gitlab"}
 	})
 	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/x"})
 	if !isErr || out["code"] != "no_session" {
@@ -226,11 +226,46 @@ func TestRequestWithoutASessionSaysSoAndAsksNobody(t *testing.T) {
 	}
 }
 
+// A site that has no login at all (SkyWalking) has no session to look up: request must reach it without one, send no
+// credential of its own, and still refuse an agent-supplied one.
+func TestRequestReachesASiteThatNeedsNoLogin(t *testing.T) {
+	rs := newRqSite(t)
+	g := gateServer(t, "open", func(c *config.Config) {
+		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "skywalking"}
+	})
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/graphql"})
+	if isErr {
+		t.Fatalf("a site without a login needs no session: %v", out)
+	}
+	if rs.count() != 1 {
+		t.Fatalf("the request must reach the site exactly once, got %d", rs.count())
+	}
+	if seen := rs.last(); seen.Cookie != "" || seen.Auth != "" {
+		t.Errorf("no credential exists for this site, so none may be sent: %+v", seen)
+	}
+	if _, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/x",
+		"headers": map[string]any{"Authorization": "Bearer agent-made"}}); !isErr {
+		t.Error("an agent-supplied credential header is refused for every site")
+	}
+}
+
+// Only a driver that says it needs no login gets this: every other site still needs a person to have logged in.
+func TestRequestStillNeedsASessionWhenTheSiteNeedsALogin(t *testing.T) {
+	rs := newRqSite(t)
+	g := gateServer(t, "open", func(c *config.Config) {
+		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "gitlab"}
+	})
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/x"})
+	if !isErr || out["code"] != "no_session" || rs.count() != 0 {
+		t.Fatalf("%v (requests seen: %d)", out, rs.count())
+	}
+}
+
 func TestRequestAnswers401WithSessionExpiredHintAndDropsTheDeadSession(t *testing.T) {
 	rs := newRqSite(t)
 	g := withSession(t, rs, nil)
 	// the site stops accepting the cookie
-	d, _ := site.Resolve("skywalking", nil)
+	d, _ := site.Resolve("gitlab", nil)
 	g.s.core.cache.Put(mustURL(t, rs.URL), d, &site.Session{Cookies: []*http.Cookie{{Name: "sid", Value: "STALE-COOKIE-VALUE-123456", Path: "/"}}})
 	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/x"})
 	if isErr {
@@ -304,9 +339,9 @@ func TestRequestResponseSizeIsBoundedAndReported(t *testing.T) {
 	}))
 	defer big.Close()
 	g := gateServer(t, "open", func(c *config.Config) {
-		c.Aliases = map[string]string{strings.TrimPrefix(big.URL, "http://"): "skywalking"}
+		c.Aliases = map[string]string{strings.TrimPrefix(big.URL, "http://"): "gitlab"}
 	})
-	d, _ := site.Resolve("skywalking", nil)
+	d, _ := site.Resolve("gitlab", nil)
 	g.s.core.cache.Put(mustURL(t, big.URL), d, &site.Session{Tokens: map[string]string{"auth": "none"}})
 	out, isErr := g.call(t, toolRequest, map[string]any{"url": big.URL, "method": "GET", "path": "/big", "max_response_bytes": 1000})
 	if isErr {
@@ -336,9 +371,9 @@ func TestRequestTimeoutIsBoundedByTheGateway(t *testing.T) {
 	}))
 	defer slow.Close()
 	g := gateServer(t, "open", func(c *config.Config) {
-		c.Aliases = map[string]string{strings.TrimPrefix(slow.URL, "http://"): "skywalking"}
+		c.Aliases = map[string]string{strings.TrimPrefix(slow.URL, "http://"): "gitlab"}
 	})
-	d, _ := site.Resolve("skywalking", nil)
+	d, _ := site.Resolve("gitlab", nil)
 	g.s.core.cache.Put(mustURL(t, slow.URL), d, &site.Session{Tokens: map[string]string{"auth": "none"}})
 	out, isErr := g.call(t, toolRequest, map[string]any{"url": slow.URL, "method": "GET", "path": "/slow", "timeout_seconds": 1})
 	if !isErr || out["code"] != "site_unreachable" {
@@ -350,8 +385,8 @@ func TestRequestTimeoutIsBoundedByTheGateway(t *testing.T) {
 }
 
 func TestRequestTransportErrorsNeverShowTheURLOrACredential(t *testing.T) {
-	g := gateServer(t, "open", func(c *config.Config) { c.Aliases = map[string]string{"127.0.0.1:1": "skywalking"} })
-	d, _ := site.Resolve("skywalking", nil)
+	g := gateServer(t, "open", func(c *config.Config) { c.Aliases = map[string]string{"127.0.0.1:1": "gitlab"} })
+	d, _ := site.Resolve("gitlab", nil)
 	g.s.core.cache.Put(mustURL(t, "http://127.0.0.1:1"), d, &site.Session{Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}}})
 	out, isErr := g.call(t, toolRequest, map[string]any{"url": "http://127.0.0.1:1", "method": "GET", "path": "/p", "query": map[string]any{"t": "QS-SECRET-abcdef"}})
 	if !isErr || out["code"] != "site_unreachable" {
@@ -412,9 +447,9 @@ func TestRequestDoesNotFollowRedirectsUnlessAsked(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 	g := gateServer(t, "open", func(c *config.Config) {
-		c.Aliases = map[string]string{strings.TrimPrefix(ts.URL, "http://"): "skywalking"}
+		c.Aliases = map[string]string{strings.TrimPrefix(ts.URL, "http://"): "gitlab"}
 	})
-	d, _ := site.Resolve("skywalking", nil)
+	d, _ := site.Resolve("gitlab", nil)
 	g.s.core.cache.Put(mustURL(t, ts.URL), d, &site.Session{Tokens: map[string]string{"auth": "none"}})
 	out, _ := g.call(t, toolRequest, map[string]any{"url": ts.URL, "method": "GET", "path": "/old"})
 	if out["status"] != float64(302) || hits != 1 {
@@ -537,9 +572,9 @@ func TestATimeoutOfOneSecondReallyStopsTheRequestAfterAboutOneSecond(t *testing.
 	}))
 	defer slow.Close()
 	g := gateServer(t, "open", func(c *config.Config) {
-		c.Aliases = map[string]string{strings.TrimPrefix(slow.URL, "http://"): "skywalking"}
+		c.Aliases = map[string]string{strings.TrimPrefix(slow.URL, "http://"): "gitlab"}
 	})
-	d, _ := site.Resolve("skywalking", nil)
+	d, _ := site.Resolve("gitlab", nil)
 	g.s.core.cache.Put(mustURL(t, slow.URL), d, &site.Session{Tokens: map[string]string{"auth": "none"}})
 	start := time.Now()
 	out, isErr := g.call(t, toolRequest, map[string]any{"url": slow.URL, "method": "GET", "path": "/slow", "timeout_seconds": 1})
@@ -595,7 +630,7 @@ func TestRequestAuditEventCarriesTheSiteAndSizeToo(t *testing.T) {
 			ev = e
 		}
 	}
-	if ev.Event != "request" || ev.Host != strings.TrimPrefix(rs.URL, "http://") || ev.Site != "skywalking" || ev.Bytes == 0 || ev.Method != "GET" || ev.Status != 200 || ev.Path != "/api/me" {
+	if ev.Event != "request" || ev.Host != strings.TrimPrefix(rs.URL, "http://") || ev.Site != "gitlab" || ev.Bytes == 0 || ev.Method != "GET" || ev.Status != 200 || ev.Path != "/api/me" {
 		t.Errorf("%+v", ev)
 	}
 }

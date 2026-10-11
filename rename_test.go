@@ -37,6 +37,25 @@ func TestNoUserFacingTextTellsAPersonToTypeLoginAsTheCommand(t *testing.T) {
 	}
 }
 
+// A message that says what the program does names it as the subject of the sentence: "login does not connect ...".
+// "log in", "login page", "login step", "the login" (the act) stay; "login" followed by a verb that only a program can do
+// is the old name.
+var programNameAsSubject = regexp.MustCompile(`\blogin (does|do|will|would|never|cannot|can|keeps|keep|stores|sends|asks|needs|is|has|runs|opens|reads|writes|refuses|only|always)\b`)
+
+func TestNoUserFacingTextUsesLoginAsTheNameOfTheProgram(t *testing.T) {
+	for _, f := range goFiles(t) {
+		b, _ := os.ReadFile(f)
+		for i, line := range strings.Split(string(b), "\n") {
+			if t := strings.TrimSpace(line); strings.HasPrefix(t, "//") {
+				continue
+			}
+			if programNameAsSubject.MatchString(line) {
+				t.Errorf("%s:%d names the program 'login': %s", f, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 func TestTheProgramSpeaksUnderItsNewName(t *testing.T) {
 	for _, c := range []struct{ file, want string }{
 		{"main.go", "Command securl"},

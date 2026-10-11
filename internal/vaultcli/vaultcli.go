@@ -121,7 +121,7 @@ func cmdInit(e *Env) error {
 	if e.Vault.State() != vault.NotInitialized {
 		return errors.New("the vault is already initialized: `securl vault passwd` changes its passphrase; a vault is never replaced")
 	}
-	fmt.Fprintf(e.Out, "The vault holds every secret login keeps. Its passphrase is asked for again whenever the server starts, so choose one\nyou can type; it cannot be recovered. At least %d characters; a sentence of several words is a good choice.\n\n", vault.MinPassphraseRunes)
+	fmt.Fprintf(e.Out, "The vault holds every secret securl keeps. Its passphrase is asked for again whenever the server starts, so choose one\nyou can type; it cannot be recovered. At least %d characters; a sentence of several words is a good choice.\n\n", vault.MinPassphraseRunes)
 	pass, err := e.newPassphrase("New vault passphrase")
 	if err != nil {
 		return err
