@@ -41,9 +41,13 @@ func (f *Fake) Handler() http.Handler {
 		w.WriteHeader(code)
 		json.NewEncoder(w).Encode(v)
 	}
+	// The cookies are what Archery behind https gives: Django sets the session cookie HttpOnly, and both Secure
+	// (SESSION_COOKIE_SECURE and CSRF_COOKIE_SECURE). The CSRF cookie stays readable by the page's script, which copies
+	// it into the X-CSRFToken header, so it is not HttpOnly. A Secure cookie is sent back only over https, so the tests
+	// that use this fake serve it over TLS.
 	login := func(w http.ResponseWriter) {
-		http.SetCookie(w, &http.Cookie{Name: "sessionid", Value: "S", Path: "/"})
-		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: csrfAfter, Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "sessionid", Value: "S", Path: "/", Secure: true, HttpOnly: true})
+		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: csrfAfter, Path: "/", Secure: true})
 	}
 	authed := func(w http.ResponseWriter, r *http.Request) bool {
 		c, err := r.Cookie("sessionid")
@@ -68,7 +72,7 @@ func (f *Fake) Handler() http.Handler {
 	}
 
 	mux.HandleFunc("/login/", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: csrfBefore, Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: csrfBefore, Path: "/", Secure: true})
 		w.Write([]byte("login page"))
 	})
 	mux.HandleFunc("/authenticate/", func(w http.ResponseWriter, r *http.Request) {

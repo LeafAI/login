@@ -132,7 +132,12 @@ type env struct {
 
 func setup(t *testing.T) *env { return setupWith(t, nil) }
 
-func setupWith(t *testing.T, tweak func(*config.Config)) *env {
+func setupWith(t *testing.T, tweak func(*config.Config)) *env { return setupWithClient(t, nil, tweak) }
+
+// setupWithClient is setupWith with the HTTP client the server uses for the sites. The product builds that client itself
+// and has no way to switch certificate checks off, which is how it should be; a test that serves a site over TLS with
+// httptest's certificate hands in the client that trusts it (httptest.Server.Client). nil keeps the product's client.
+func setupWithClient(t *testing.T, hc *http.Client, tweak func(*config.Config)) *env {
 	t.Helper()
 	browsertest.Require(t)
 	dir := t.TempDir()
@@ -149,7 +154,7 @@ func setupWith(t *testing.T, tweak func(*config.Config)) *env {
 		tweak(cfg)
 	}
 	rec := &recorder{}
-	srv, _, err := mcpserver.New(cfg, mcpserver.Options{Notifier: rec, Tunnels: localTunnels{}, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
+	srv, _, err := mcpserver.New(cfg, mcpserver.Options{Notifier: rec, Tunnels: localTunnels{}, HTTP: hc, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
