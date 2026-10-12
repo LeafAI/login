@@ -572,6 +572,156 @@ func TestAdmitIsAskedOncePerNewFlowNotPerJoiner(t *testing.T) {
 	m.Close()
 }
 
+// A login that has ended is not a login in progress. There is a moment between the end of a flow and its removal from the
+// table (its onDone callback runs in between), and a request that arrives then used to be handed the finished flow: no new
+// login, and no question to Admit, so the rate limit and the cool-down after a Reject did not apply to it. It got the old
+// result instead (in CI: tunnel_unavailable where rate_limited was due, TestRateLimitStopsFlooding).
+func TestARequestAfterAFlowEndedIsANewRequestNotAJoinerOfTheOldOne(t *testing.T) {
+	var asked int
+	var mu sync.Mutex
+	cfg := Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{err: errors.New("no ssh")},
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond,
+		Admit: func(site.Driver, *url.URL, string) error { mu.Lock(); asked++; mu.Unlock(); return nil }}
+	m := NewManager(cfg)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+
+	hold := make(chan struct{})
+	entered := make(chan struct{})
+	first := m.Start(stubDriver{}, u, "r", http.DefaultClient, func(*Flow, Result) { close(entered); <-hold })
+	<-first.Done() // the flow has ended ...
+	<-entered      // ... and its onDone is still running, so it has not been removed yet
+
+	second := m.Start(stubDriver{}, u, "r", http.DefaultClient, nil)
+	close(hold)
+	if second == first {
+		t.Fatal("a request that arrives after a flow has ended was handed that flow")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if asked != 2 {
+		t.Errorf("Admit was asked %d times, want 2: the second request is a new one and has to be admitted (or refused) on its own", asked)
+	}
+}
+
+// The same moment, seen from the rate limit: the refusal has to reach the request that Admit refuses.
+func TestTheRefusalOfAnAdmitReachesARequestMadeJustAfterAFlowEnded(t *testing.T) {
+	refuse := false
+	var mu sync.Mutex
+	cfg := Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{err: errors.New("no ssh")},
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond,
+		Admit: func(site.Driver, *url.URL, string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if refuse {
+				return errors.New("too many requests")
+			}
+			return nil
+		}}
+	m := NewManager(cfg)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+
+	hold := make(chan struct{})
+	entered := make(chan struct{})
+	first := m.Start(stubDriver{}, u, "r", http.DefaultClient, func(*Flow, Result) { close(entered); <-hold })
+	<-first.Done()
+	<-entered
+	mu.Lock()
+	refuse = true // the limiter has now had enough
+	mu.Unlock()
+
+	second := m.Start(stubDriver{}, u, "r", http.DefaultClient, nil)
+	close(hold)
+	select {
+	case <-second.Done():
+	default:
+		t.Fatal("a refused request must come back already finished")
+	}
+	if err := second.Result().Err; err == nil || err.Error() != "too many requests" {
+		t.Errorf("the second request got %v, want the refusal of Admit (not the old flow's result: %v)", err, first.Result().Err)
+	}
+}
+
+// The old flow removes itself from the table when its onDone returns. By then a newer flow for the same site may have taken
+// its place, and removing "the flow for this site" would remove that one: a third request would not find the second flow
+// to join, and would start a second login for the same site at the same time.
+func TestAnEndedFlowDoesNotRemoveTheNewerFlowThatTookItsPlace(t *testing.T) {
+	cfg := Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{},
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond}
+	m := NewManager(cfg)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+
+	hold := make(chan struct{})
+	entered := make(chan struct{})
+	first := m.Start(&instantDriver{}, u, "r", http.DefaultClient, func(*Flow, Result) { close(entered); <-hold })
+	<-first.Done()
+	<-entered
+	second := m.Start(stubDriver{}, u, "r", http.DefaultClient, nil) // waits for a person: it stays in progress
+	if second == first {
+		t.Fatal("the second request must be a new flow")
+	}
+	close(hold) // the first flow's onDone returns and it leaves the table
+	waitFor(t, "the first flow to leave", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		_, still := m.flows[first.ID]
+		return still // flows keeps it for a while; what matters is byBase below
+	})
+	time.Sleep(50 * time.Millisecond) // the first flow's goroutine has run its delete by now
+	third := m.Start(stubDriver{}, u, "r", http.DefaultClient, nil)
+	if third != second {
+		t.Error("the first flow removed the second one from the table: a third request started another login instead of joining it")
+	}
+}
+
+// A flow that has ended leaves the table of flows in progress once its onDone has returned. Without that the table keeps
+// one entry for every site that was ever logged in to, for as long as the process runs.
+func TestAnEndedFlowLeavesTheTableOfFlowsInProgress(t *testing.T) {
+	cfg := Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{},
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond}
+	m := NewManager(cfg)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	done := make(chan struct{})
+	f := m.Start(&instantDriver{}, u, "r", http.DefaultClient, func(*Flow, Result) { close(done) })
+	<-f.Done()
+	<-done
+	waitFor(t, "the ended flow to leave the table of flows in progress", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.byBase) == 0
+	})
+}
+
+// instantDriver finishes at once, with no question to a person.
+type instantDriver struct{}
+
+func (*instantDriver) Name() string        { return "instant" }
+func (*instantDriver) Match(*url.URL) bool { return true }
+func (*instantDriver) NeedsLogin() bool    { return true }
+func (*instantDriver) Login(context.Context, *url.URL, site.Asker, *http.Client) (*site.Session, error) {
+	return &site.Session{}, nil
+}
+func (*instantDriver) Probe(context.Context, *url.URL, *site.Session, *http.Client) error { return nil }
+
+// What a flow in progress still does: a second request for the same site joins it, and Admit is asked only once.
+func TestARequestWhileAFlowIsStillRunningStillJoinsIt(t *testing.T) {
+	asked := 0
+	cfg := Config{Keys: keyring.NewMemoryPool(8, time.Hour), Notifier: okNotifier{}, Tunnels: fakeTunnels{},
+		PageURL: "https://page.example/", TTL: time.Minute, Grace: time.Millisecond,
+		Admit: func(site.Driver, *url.URL, string) error { asked++; return nil }}
+	m := NewManager(cfg)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	a := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	b := m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	if a != b || asked != 1 {
+		t.Fatalf("same flow=%v Admit calls=%d: a flow that is still running is joined, not started again", a == b, asked)
+	}
+}
+
 func TestOnRoundReportsEachRoundOnceEvenAfterATunnelRestart(t *testing.T) {
 	ts := &dyingTunnels{}
 	rec := &recNotifier{}
