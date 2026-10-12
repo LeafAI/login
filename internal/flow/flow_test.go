@@ -229,7 +229,7 @@ func TestTunnelRestartResendsLink(t *testing.T) {
 	ts.started[0].Close() // the ssh process dies while the human has not answered
 	waitFor(t, "replacement message", func() bool { return len(rec.all()) == 2 })
 	msgs := rec.all()
-	if !strings.Contains(msgs[1], "replaces the previous one") || strings.Contains(msgs[0], "replaces") {
+	if !strings.Contains(msgs[1], replacementMark) || strings.Contains(msgs[0], replacementMark) {
 		t.Errorf("messages:\n%s\n---\n%s", msgs[0], msgs[1])
 	}
 	if ts.count() != 2 || !strings.Contains(msgs[1], "%2Ft1") && !strings.Contains(msgs[1], "/t1") {
@@ -362,7 +362,7 @@ func TestADeadRouteIsReplacedWhileThePersonHasNotAnswered(t *testing.T) {
 	ts.kill("t0") // the ssh process is still running; only the route is gone
 	waitFor(t, "replacement message", func() bool { return len(rec.all()) == 2 })
 	msgs := rec.all()
-	if !strings.Contains(msgs[1], "replaces the previous one") || strings.Contains(msgs[0], "replaces") {
+	if !strings.Contains(msgs[1], replacementMark) || strings.Contains(msgs[0], replacementMark) {
 		t.Errorf("messages:\n%s\n---\n%s", msgs[0], msgs[1])
 	}
 	if !strings.Contains(msgs[1], "/t1") && !strings.Contains(msgs[1], "%2Ft1") {
@@ -492,6 +492,86 @@ func TestRepeatedDeadRoutesEndTheLoginWithATunnelError(t *testing.T) {
 		}
 	case <-time.After(waitLimit):
 		t.Fatal("the login must give up when route after route dies")
+	}
+}
+
+// A person who gets a second message for the same login has to tell it from the first: the old link no longer works (its
+// tunnel was closed), and the two messages are otherwise identical. The replacement says so where it cannot be missed, in the
+// title that DingTalk shows in the chat list and at the top of the text, and the first message does not.
+func TestTheReplacementMessageSaysItReplacesTheEarlierLink(t *testing.T) {
+	ts := &dyingTunnels{}
+	n := &titledNotifier{}
+	m := manager(t, n, ts, time.Minute)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	waitFor(t, "first message", func() bool { n.mu.Lock(); defer n.mu.Unlock(); return len(n.msgs) == 1 })
+
+	n.mu.Lock()
+	firstTitle, firstText := n.titles[0], n.msgs[0]
+	n.mu.Unlock()
+	if strings.Contains(strings.ToLower(firstTitle+firstText), "replace") {
+		t.Errorf("the first message must not talk about a replacement:\n%s\n%s", firstTitle, firstText)
+	}
+
+	ts.started[0].Close() // the tunnel drops
+	waitFor(t, "replacement message", func() bool { n.mu.Lock(); defer n.mu.Unlock(); return len(n.msgs) == 2 })
+	n.mu.Lock()
+	title, text := n.titles[1], n.msgs[1]
+	n.mu.Unlock()
+
+	if !strings.HasPrefix(title, replacementMark) {
+		t.Errorf("the title of the replacement must start with %q so that the chat list shows it: %q", replacementMark, title)
+	}
+	if !strings.HasPrefix(text, "**"+replacementMark) {
+		t.Errorf("the text must open with the warning in bold, before anything else: %q", text[:min(len(text), 120)])
+	}
+	lower := strings.ToLower(text)
+	for _, want := range []string{"earlier link", "no longer works", "use this one"} {
+		if !strings.Contains(lower, want) {
+			t.Errorf("the warning must say %q: %q", want, text[:min(len(text), 300)])
+		}
+	}
+	// The warning is a paragraph of its own. Glued to the heading ("...one it.### Login request") the heading is not a
+	// heading any more, and the two run together on the screen.
+	if !strings.Contains(text, replacementNote+"\n\n### ") {
+		t.Errorf("the warning must be followed by a blank line and then the heading: %q", text[:min(len(text), 400)])
+	}
+	// What the person needs to act on is still there, in the same form as in the first message.
+	for _, want := range []string{"Key code", "Expires", "](http"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the replacement lost %q", want)
+		}
+	}
+	if title == firstTitle {
+		t.Errorf("the two titles are the same: %q", title)
+	}
+}
+
+// Every replacement says so, not only the first: a login can be moved to a new tunnel more than once.
+func TestEveryReplacementIsMarked(t *testing.T) {
+	ts := &dyingTunnels{}
+	n := &titledNotifier{}
+	m := manager(t, n, ts, time.Minute)
+	defer m.Close()
+	u, _ := url.Parse("https://site.example")
+	m.Start(stubDriver{}, u, "", http.DefaultClient, nil)
+	for i := 0; i < maxTunnelRestarts; i++ {
+		i := i
+		waitFor(t, "a message", func() bool { n.mu.Lock(); defer n.mu.Unlock(); return len(n.msgs) == i+1 })
+		waitFor(t, "a tunnel", func() bool { ts.mu.Lock(); defer ts.mu.Unlock(); return len(ts.started) > i })
+		ts.mu.Lock()
+		tn := ts.started[i]
+		ts.mu.Unlock()
+		tn.Close()
+	}
+	waitFor(t, "all replacements", func() bool { n.mu.Lock(); defer n.mu.Unlock(); return len(n.msgs) == maxTunnelRestarts+1 })
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for i := 1; i < len(n.titles); i++ {
+		if !strings.HasPrefix(n.titles[i], replacementMark) || !strings.HasPrefix(n.msgs[i], "**"+replacementMark) {
+			t.Errorf("message %d is not marked as a replacement: %q", i+1, n.titles[i])
+		}
 	}
 }
 
