@@ -124,3 +124,100 @@ func TestRedactCutsQueryStringOfAnyURL(t *testing.T) {
 		t.Errorf("host, path and cause must stay: %s", got)
 	}
 }
+
+// DingTalk @-mentions a person only when the phone number is in the message's `at.atMobiles` list AND the same number
+// is written as "@number" in the text (its documented examples all start the markdown text with "@number"). The robot
+// used to send the list alone, so nobody was ever mentioned: the message arrived, but no phone rang.
+
+func sendCapturing(t *testing.T, d *DingTalk, title, text string) map[string]any {
+	t.Helper()
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &body)
+		w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	defer srv.Close()
+	d.Webhook = srv.URL + "/robot/send?access_token=T"
+	if err := d.Markdown(context.Background(), title, text); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func mdText(t *testing.T, body map[string]any) string {
+	t.Helper()
+	md, ok := body["markdown"].(map[string]any)
+	if !ok {
+		t.Fatalf("no markdown in %v", body)
+	}
+	s, _ := md["text"].(string)
+	return s
+}
+
+func atMobiles(t *testing.T, body map[string]any) []string {
+	t.Helper()
+	at, _ := body["at"].(map[string]any)
+	var out []string
+	for _, v := range at["atMobiles"].([]any) {
+		out = append(out, v.(string))
+	}
+	return out
+}
+
+func TestEachMentionedNumberIsWrittenInTheTextAndListed(t *testing.T) {
+	body := sendCapturing(t, &DingTalk{Mobiles: []string{"13800000001", "13900000002"}}, "t", "### hello\n\nbody")
+	text := mdText(t, body)
+	if !strings.HasPrefix(text, "@13800000001 @13900000002\n\n") {
+		t.Errorf("the text must start with the @numbers, then a blank line: %q", text)
+	}
+	if !strings.HasSuffix(text, "### hello\n\nbody") {
+		t.Errorf("the message itself must follow unchanged: %q", text)
+	}
+	if got := strings.Join(atMobiles(t, body), ","); got != "13800000001,13900000002" {
+		t.Errorf("atMobiles = %q, the same numbers must be listed", got)
+	}
+}
+
+func TestNobodyIsMentionedWhenNoNumberIsConfigured(t *testing.T) {
+	body := sendCapturing(t, &DingTalk{}, "t", "### hello")
+	if text := mdText(t, body); text != "### hello" {
+		t.Errorf("without numbers the text is the message alone: %q", text)
+	}
+	if got := atMobiles(t, body); len(got) != 0 {
+		t.Errorf("atMobiles = %v, want none", got)
+	}
+	if at, _ := body["at"].(map[string]any); at["isAtAll"] != false {
+		t.Errorf("isAtAll must stay false: everyone in the group is never mentioned: %v", at["isAtAll"])
+	}
+}
+
+// The numbers come from the configuration, a file a person edits. A stray space, an empty entry, a repeat or a character
+// that is not a digit must not end up in a message as something that looks like another mention.
+func TestMentionedNumbersAreCleaned(t *testing.T) {
+	body := sendCapturing(t, &DingTalk{Mobiles: []string{" 13800000001 ", "", "13800000001", "1380000x002", "+8613900000003", "13900000004\n@all", "13700000005", "\t13600000006 "}}, "t", "m")
+	text := mdText(t, body)
+	if !strings.HasPrefix(text, "@13800000001 @13700000005 @13600000006\n\n") {
+		t.Errorf("want only the clean, distinct numbers, in order (spaces ignored, an entry with any other character refused, not repaired): %q", text)
+	}
+	for _, leaked := range []string{"@all", "x002", "13900000004", "8613900000003", "+"} {
+		if strings.Contains(text, leaked) {
+			t.Errorf("a malformed entry reached the text (%q): %q", leaked, text)
+		}
+	}
+	if got := strings.Join(atMobiles(t, body), ","); got != "13800000001,13700000005,13600000006" {
+		t.Errorf("atMobiles = %q", got)
+	}
+}
+
+// Text that an agent supplies (the reason for a login, the title of a SQL change) is escaped before it is put in a message.
+// It may contain "@13800000009": that must stay plain text. Only the numbers in the configuration are mentioned.
+func TestAnAgentCannotMentionAnyoneByWhatItWrites(t *testing.T) {
+	body := sendCapturing(t, &DingTalk{Mobiles: []string{"13800000001"}}, "t", "reason: "+Escape("please call @13800000009 @all now", 100))
+	if got := strings.Join(atMobiles(t, body), ","); got != "13800000001" {
+		t.Errorf("atMobiles = %q: only the configured number may be listed", got)
+	}
+	if at, _ := body["at"].(map[string]any); at["isAtAll"] != false {
+		t.Error("isAtAll must stay false")
+	}
+}

@@ -223,7 +223,15 @@ API (bound to 127.0.0.1, reachable only via the tunnel; two routes per round):
 Custom-robot webhook `https://oapi.dingtalk.com/robot/send?access_token=…`, with optional
 signing secret (`timestamp\nsecret` HMAC-SHA256, base64, url-encoded) and keyword/IP-allowlist
 compatible text. Sends a markdown message: site, requester ("agent asked for login"), the **round link** (one
-click), the key fingerprint, expiry time. `@mobiles` configurable. One message per round.
+click), the key fingerprint, expiry time. One message per round.
+
+`dingtalk.at_mobiles` @-mentions people. DingTalk mentions a person only when the number is both in the message's
+`at.atMobiles` list and written as `@number` in the markdown text, so the robot puts the numbers in both: the text
+starts with `@n1 @n2` and a blank line, and the list carries the same numbers. The list alone sends the message and
+mentions nobody. The numbers are cleaned the way the setup wizard checks them: spaces around an entry are ignored,
+repeats are dropped, and an entry with any character other than a digit is skipped (not repaired: that would mention
+someone the person did not mean). `isAtAll` is always false. The numbers come only from the configuration; text an agent
+supplies is escaped and cannot add a mention.
 
 ### 4.5 Site drivers (`site`)
 ```go
