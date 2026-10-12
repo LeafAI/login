@@ -51,7 +51,10 @@ The login API runs on 127.0.0.1 and is exposed through `ssh -R`. Order and extra
   `ps ax | grep 'ssh .*-R'`. The audit log says which provider carried each link
   (`grep '"event":"tunnel"' audit.jsonl`).
 * If the tunnel drops while someone is typing, a new tunnel is started and a **replacement link** is sent
-  (up to twice). The old link stops working.
+  (up to twice). The old link stops working. A free provider can also drop the public name while `ssh` keeps running, so
+  a tunnel is checked every 20 seconds while a person has not answered, and replaced after two misses in a row. The
+  replacement message is marked so that it cannot be mistaken for the first: its title and its first line say
+  **REPLACEMENT LINK**, and that the earlier link no longer works. Use the newest message in the chat.
 
 ## 4. The static login page
 
@@ -150,6 +153,10 @@ securl config totp off link       # switch off, keep the secret (so your authent
 Page-side messages (shown to the human): *Key fingerprint does not match* or *link is incomplete* mean the link
 was altered or truncated; ask for a new login. *stale timestamp* means the device clock is off by more than two
 minutes. *refused the submission (400…)* usually means the link belongs to an older round: use the newest message.
+*Could not reach the login server* (the browser alone says *Failed to fetch*) means the link's tunnel is gone: the link is
+out of date, so open the newest message. It does not prove that the answer was lost: if the login server already had it,
+it closes its tunnel at once, and the page can lose the reply. When the AI agent has said that it is done, there is
+nothing more to do.
 
 ## 8. Not supported (yet)
 

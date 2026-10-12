@@ -368,10 +368,21 @@
     const message = await openpgp.createMessage({ text: envelope });
     const armored = await openpgp.encrypt({ message, encryptionKeys: ctx.key, format: 'armored' });
     const submit = ctx.api + '/submit?mode=' + encodeURIComponent(ctx.mode) + '&round=' + ctx.round;
-    const resp = await fetch(submit, {
-      method: 'POST', body: armored, headers: { 'Content-Type': 'text/plain' },
-      cache: 'no-store', referrerPolicy: 'no-referrer', credentials: 'omit', redirect: 'error',
-    });
+    let resp;
+    try {
+      resp = await fetch(submit, {
+        method: 'POST', body: armored, headers: { 'Content-Type': 'text/plain' },
+        cache: 'no-store', referrerPolicy: 'no-referrer', credentials: 'omit', redirect: 'error',
+      });
+    } catch (e) {
+      // The browser only says "Failed to fetch". The usual cause is that this link points at a tunnel that has since been
+      // replaced: the person is sent a new link, and the old one reaches nothing. It can also be that the answer got
+      // through and only the reply was lost, so the page does not claim that nothing arrived. Sending again is safe either
+      // way: a round accepts one answer, and the server refuses a second one.
+      throw new Error('Could not reach the login server. This link may be out of date: the connection is replaced when it ' +
+        'drops, and DingTalk then has a newer message. Open the newest link in DingTalk and try again. If the AI agent ' +
+        'has already told you that it is done, there is nothing more to do.');
+    }
     if (!resp.ok) {
       let detail = '';
       try { detail = String((await resp.json()).error || '').slice(0, 120); } catch (e) { /* ignore */ }

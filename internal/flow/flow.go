@@ -410,6 +410,16 @@ func (f *Flow) probeTunnel(ctx context.Context, publicURL string) error {
 
 const maxTunnelRestarts = 2
 
+// replacementMark opens the title and the text of a message that replaces an earlier link. The old link's tunnel has been
+// closed, so it no longer works, and the two messages are otherwise alike: a person has to be able to tell them apart at
+// a glance, in the chat list and in the message.
+const replacementMark = "REPLACEMENT LINK"
+
+// replacementNote is the warning at the top of a replacement message. The earlier link names a tunnel that has been closed,
+// so opening it ends in "Failed to fetch": it says which link to use, and why there is a second one.
+const replacementNote = "**" + replacementMark + ": the earlier link no longer works. Use this one.** The connection that carried the " +
+	"earlier link dropped and was replaced, so only this message's link reaches the login server."
+
 // routeMissesBeforeReplacing is how many checks in a row must fail before a tunnel whose ssh process is still running
 // is replaced.
 const routeMissesBeforeReplacing = 2
@@ -491,6 +501,12 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 		if p := f.purpose(); p != nil {
 			title = p.Title
 		}
+		if note != "" {
+			// The title is what the chat list shows, so the mark goes there too; the note is its own paragraph, or the
+			// heading that follows it is not a heading any more.
+			title = replacementMark + " - " + title
+			note += "\n\n"
+		}
 		if err := f.m.cfg.Notifier.Markdown(ctx, title, message(f, mode, f.rounds, link, f.key.Fingerprint(), expires, note, f.m.cfg.Unlock != nil, f.m.cfg.Seal != nil)); err != nil {
 			return fmt.Errorf("%w: %s", ErrNotify, notify.Redact(err.Error()))
 		}
@@ -537,7 +553,7 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 			if err := f.restartTunnel(ctx); err != nil {
 				return nil, err
 			}
-			if err := send("The tunnel connection dropped and was re-created. This link replaces the previous one."); err != nil {
+			if err := send(replacementNote); err != nil {
 				return nil, err
 			}
 		case r := <-ch:
@@ -565,7 +581,7 @@ func (f *Flow) Ask(ctx context.Context, mode string, fields []site.Field) (site.
 			if err := f.restartTunnel(ctx); err != nil {
 				return nil, err
 			}
-			if err := send("The tunnel connection dropped and was re-created. This link replaces the previous one."); err != nil {
+			if err := send(replacementNote); err != nil {
 				return nil, err
 			}
 		case <-ctx.Done():

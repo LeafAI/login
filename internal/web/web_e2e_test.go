@@ -25,7 +25,11 @@ type rig struct {
 	round *api.Round
 	frag  string // link fragment
 	key   *keyring.Key
+	srv   *api.Server
 }
+
+// srvClose stops the server the link names, as a tunnel that has been replaced no longer reaches it.
+func (r *rig) srvClose() { r.srv.Close() }
 
 func newRig(t *testing.T, mode string, fields []web.Field) *rig {
 	return newRigWithFactor(t, mode, fields, nil)
@@ -64,7 +68,7 @@ func newRigFull(t *testing.T, mode string, fields []web.Field, f api.Factor, lin
 		PublicKey: pub, Fingerprint: k.Fingerprint(), Password: round.Password(), FactorDigits: srv.FactorDigits(),
 		LinkCodes: linkCodes, LinkDigits: linkDigits, Fields: fields,
 	})
-	return &rig{t: t, dir: dir, round: round, frag: browsertest.Fragment(link), key: k}
+	return &rig{t: t, dir: dir, round: round, frag: browsertest.Fragment(link), key: k, srv: srv}
 }
 
 // mutate rewrites parameters of the link fragment (to craft hostile links).
@@ -660,5 +664,36 @@ func TestBrowserVaultPassphraseIsHiddenAndNotOfferedToPasswordManagers(t *testin
 	}
 	if len(res.Autocomplete) != 1 || res.Autocomplete[0] != "off" {
 		t.Errorf("a password manager must not be invited to fill or save it: %v", res.Autocomplete)
+	}
+}
+
+// A link points at one tunnel. When the tunnel drops, a new one is opened and the person gets a new link; the old link then
+// points at an address that answers nothing, or a 502 from the tunnel provider. What the person saw was the browser's own
+// "Failed to fetch", which says nothing about what to do, and they tried again on the same link. The page now says what
+// has most likely happened and what to do.
+func TestBrowserSaysWhenTheLinkNoLongerReachesTheServer(t *testing.T) {
+	r := newRig(t, "login", nil)
+	r.round.SetStatus(api.StateWaiting, "")
+	// The server the link names has gone: this is what an old link finds after the tunnel was replaced.
+	r.srvClose()
+	res := browsertest.Drive(t, r.dir, r.frag, "submit", `{"username":"alice","password":"s3cr3t!"}`, "")
+	msg := res.Msg
+	if strings.Contains(msg, "Failed to fetch") && !strings.Contains(strings.ToLower(msg), "newest") {
+		t.Errorf("the page shows the browser's bare error and nothing to do about it: %q", msg)
+	}
+	lower := strings.ToLower(msg)
+	for _, want := range []string{"this link may be out of date", "open the newest link in dingtalk", "try again"} {
+		if !strings.Contains(lower, want) {
+			t.Errorf("the message must tell the person that the link may be out of date and to use the newest one (missing %q): %q", want, msg)
+		}
+	}
+	// A failed fetch does not prove that nothing arrived: the answer can get through and only the reply be lost, which is
+	// what a person sees when the login server closes its tunnel as soon as it has the answer. The page must not say that
+	// nothing was sent, or a person who did succeed is told they did not. It says what to do if the agent already reported.
+	if strings.Contains(lower, "nothing was sent") || strings.Contains(lower, "was not sent") || strings.Contains(lower, "not received") {
+		t.Errorf("the page claims that nothing arrived, which it cannot know: %q", msg)
+	}
+	if !strings.Contains(lower, "already told you that it is done") || !strings.Contains(lower, "nothing more to do") {
+		t.Errorf("the page must say that there is nothing more to do when the agent has already reported success: %q", msg)
 	}
 }
