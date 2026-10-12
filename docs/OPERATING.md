@@ -27,6 +27,10 @@ change keeps the previous file as `config.yaml.bak`.
 2. Choose a security setting: **signing secret** (recommended, put it in `dingtalk.secret`), or a **keyword**
    (put it in `dingtalk.keyword`), or an IP allow-list.
 3. Put the webhook in `dingtalk.webhook` (or `SECURL_DINGTALK_WEBHOOK`).
+   To @-mention people when a link is sent, list their phone numbers in `dingtalk.at_mobiles` (digits only, for example
+   `securl config set dingtalk.at_mobiles 13800000001,13900000002`). Each message then starts with `@number` for every
+   one of them: DingTalk needs the number in the text as well as in the mention list. A number with anything but digits
+   in it is skipped, so check the first message: `securl doctor -send` mentions them too.
 4. Check: `securl doctor -send` should post a test message. DingTalk rejects it with an `errcode` if the keyword,
    signature or IP rule does not match; the error is printed.
 

@@ -151,7 +151,7 @@ dingtalk:
   webhook: https://oapi.dingtalk.com/robot/send?access_token=...
   secret: SEC...            # signing secret, if the robot uses "加签"
   keyword: login            # only if the robot requires a keyword
-  at_mobiles: ["138..."]
+  at_mobiles: ["138..."]    # phone numbers to @mention: digits only; each message starts with "@number" for every one
 tunnel:
   order: [pinggy, localhost.run, serveo, tunnl]   # ssh-j is TCP-only and is never used for the web API
   timeout: 20s

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -57,10 +58,16 @@ func (d *DingTalk) Markdown(ctx context.Context, title, text string) error {
 		q.Set("sign", Sign(d.Secret, ts))
 		u.RawQuery = q.Encode()
 	}
+	// DingTalk mentions a person only when the number is in at.atMobiles AND written as "@number" in the text. The list
+	// alone sends the message and mentions nobody. The numbers come from the configuration, never from the message.
+	mobiles := cleanMobiles(d.Mobiles)
+	if len(mobiles) > 0 {
+		text = "@" + strings.Join(mobiles, " @") + "\n\n" + text
+	}
 	body, _ := json.Marshal(map[string]any{
 		"msgtype":  "markdown",
 		"markdown": map[string]string{"title": title, "text": text},
-		"at":       map[string]any{"atMobiles": d.Mobiles, "isAtAll": false},
+		"at":       map[string]any{"atMobiles": mobiles, "isAtAll": false},
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
@@ -88,6 +95,25 @@ func (d *DingTalk) Markdown(ctx context.Context, title, text string) error {
 		return fmt.Errorf("dingtalk: errcode %d: %s", r.Code, r.Msg)
 	}
 	return nil
+}
+
+// cleanMobiles returns the phone numbers to mention: digits only, each once, in the order given. Surrounding spaces are
+// ignored. An entry with any other character (a "+", a letter, a line break) is refused rather than repaired, as the
+// setup wizard refuses it: rewriting a number would mention someone the person did not mean, and passing it on would
+// put something that is not a number into a message. The result is never nil, so that it is sent as an empty list and
+// not as JSON null.
+func cleanMobiles(in []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, m := range in {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] || strings.Trim(m, "0123456789") != "" {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
 }
 
 // scrubURLError drops the request URL that net/http copies into *url.Error: for a DingTalk webhook it
