@@ -18,6 +18,7 @@ import (
 	"github.com/LeafAI/securl/internal/audit"
 	"github.com/LeafAI/securl/internal/config"
 	"github.com/LeafAI/securl/internal/flow"
+	"github.com/LeafAI/securl/internal/site"
 	"github.com/LeafAI/securl/internal/site/archery"
 	"github.com/LeafAI/securl/internal/totp"
 	"github.com/LeafAI/securl/internal/vault"
@@ -107,6 +108,45 @@ func TestAuditCanBeDisabled(t *testing.T) {
 	s.observe("login", nil, LoginInput{URL: "https://x.example"}, nil, nil, 0)
 	if _, err := os.Stat(cfg.Audit.File); err == nil {
 		t.Error("a disabled audit log must not create a file")
+	}
+}
+
+// The limit has to hold however quickly the requests follow each other. A flow that has ended stays in the manager's table
+// until its onDone callback returns, and a request made in that moment used to be handed the finished flow: no question to
+// the limiter, no audit entry, and the old error back instead of rate_limited. On a slow CI runner that made
+// TestRateLimitStopsFlooding fail ("4th attempt: tunnel_unavailable"). Here the moment is made to last, so that it does not
+// depend on the machine.
+func TestRateLimitHoldsForARequestMadeWhileTheLastFlowIsStillBeingWrappedUp(t *testing.T) {
+	s, cfg := newTestServer(t, func(c *config.Config) { c.Limits.PerSite = 1 })
+	c, terr := s.gate()
+	if terr != nil {
+		t.Fatal(terr)
+	}
+	base := mustURL(t, "https://gitlab.corp.example")
+	d, err := site.Resolve("gitlab", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := make(chan struct{})
+	entered := make(chan struct{})
+	first := c.mgr.Start(d, base, "r", s.hc, func(*flow.Flow, flow.Result) { close(entered); <-hold })
+	<-first.Done() // ended (no tunnel in this test), its onDone still running
+	<-entered
+
+	// The second request is the one that the limit (1 per site) refuses.
+	_, lastErr := s.ensureLogin(context.Background(), nil, "https://gitlab.corp.example", "gitlab", "r", false, true, time.Second)
+	close(hold)
+	if lastErr == nil || lastErr.Code != "rate_limited" {
+		t.Fatalf("2nd attempt: %+v, want rate_limited", lastErr)
+	}
+	var limited int
+	for _, e := range events(t, cfg.Audit.File) {
+		if e.Event == "rate_limited" {
+			limited++
+		}
+	}
+	if limited != 1 {
+		t.Errorf("rate_limited events = %d, want 1: the refusal must be audited", limited)
 	}
 }
 

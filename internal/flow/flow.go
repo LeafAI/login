@@ -193,10 +193,13 @@ func (f *Flow) shutdown() {
 func (m *Manager) Start(d site.Driver, base *url.URL, reason string, hc *http.Client, onDone func(*Flow, Result)) *Flow {
 	key := site.Key(base)
 	m.mu.Lock()
-	if f := m.byBase[key]; f != nil {
+	if f := m.byBase[key]; f != nil && !f.ended() {
 		m.mu.Unlock()
 		return f
 	}
+	// A flow that has ended but is still in the table (its onDone callback has not returned yet) is not a login in
+	// progress: a request that arrives now is a new one, and has to be admitted, or refused, on its own. Joining the finished
+	// flow would hand back its old result and skip Admit, and with it the rate limit and the cool-down after a Reject.
 	if adm := m.cfg.Admit; adm != nil {
 		if err := adm(d, base, reason); err != nil {
 			m.mu.Unlock()
@@ -219,7 +222,11 @@ func (m *Manager) Start(d site.Driver, base *url.URL, reason string, hc *http.Cl
 			onDone(f, f.result)
 		}
 		m.mu.Lock()
-		delete(m.byBase, key)
+		// Only this flow's own entry: a newer flow for the same site may have taken its place while onDone ran, and it
+		// must stay where it is, or the next request would not find it to join.
+		if m.byBase[key] == f {
+			delete(m.byBase, key)
+		}
 		m.mu.Unlock()
 		go func() { // keep flows addressable for a while so login_wait can fetch the result
 			time.Sleep(10 * time.Minute)
@@ -285,7 +292,17 @@ func (m *Manager) CancelBase(key string) bool {
 }
 
 func (f *Flow) Done() <-chan struct{} { return f.done }
-func (f *Flow) Result() Result        { return f.result }
+
+// ended reports whether the flow has finished.
+func (f *Flow) ended() bool {
+	select {
+	case <-f.done:
+		return true
+	default:
+		return false
+	}
+}
+func (f *Flow) Result() Result { return f.result }
 
 func (f *Flow) Snapshot() Snapshot {
 	f.mu.Lock()
