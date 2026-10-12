@@ -16,9 +16,11 @@ import (
 	"github.com/LeafAI/securl/internal/site/archery/archerytest"
 )
 
+// setup serves the fake over TLS, as Archery is in production: its cookies are Secure, which a client sends back only over
+// https. srv.Client() trusts the test server's certificate.
 func setup(t *testing.T, f *archerytest.Fake, answers map[string]site.Credentials) (*Client, *sitetestAsker) {
 	t.Helper()
-	srv := httptest.NewServer(f.Handler())
+	srv := httptest.NewTLSServer(f.Handler())
 	t.Cleanup(srv.Close)
 	base, _ := url.Parse(srv.URL)
 	a := &sitetestAsker{Answers: answers}
@@ -90,7 +92,7 @@ func TestLoginWithoutAndWith2FA(t *testing.T) {
 }
 
 func TestLoginFailures(t *testing.T) {
-	srv := httptest.NewServer((&archerytest.Fake{TwoFA: true, Legacy: true}).Handler())
+	srv := httptest.NewTLSServer((&archerytest.Fake{TwoFA: true, Legacy: true}).Handler())
 	defer srv.Close()
 	base, _ := url.Parse(srv.URL)
 	bad := &sitetestAsker{Answers: map[string]site.Credentials{"login": {"username": "alice", "password": "x"}}}
@@ -283,7 +285,7 @@ func TestLegacyHTMLErrorPagesAreErrors(t *testing.T) {
 
 func TestInspectTellsTheGenerations(t *testing.T) {
 	for legacy, want := range map[bool]string{false: "REST", true: "1.x"} {
-		srv := httptest.NewServer((&archerytest.Fake{Legacy: legacy}).Handler())
+		srv := httptest.NewTLSServer((&archerytest.Fake{Legacy: legacy}).Handler())
 		u, _ := url.Parse(srv.URL)
 		out, err := driver{}.Inspect(context.Background(), u, srv.Client())
 		srv.Close()

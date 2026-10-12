@@ -47,9 +47,9 @@ func TestArcheryToolsEndToEnd(t *testing.T) {
 
 func testArcheryToolsEndToEnd(t *testing.T, legacy bool) {
 	f := &archerytest.Fake{Legacy: legacy}
-	arch := httptest.NewServer(f.Handler())
+	arch := httptest.NewTLSServer(f.Handler())
 	defer arch.Close()
-	e := setupWith(t, func(c *config.Config) {
+	e := setupWithClient(t, arch.Client(), func(c *config.Config) {
 		c.Archery.PollInterval = 20 * time.Millisecond
 		c.Archery.DefaultGroup = "dba"
 	})
@@ -120,10 +120,10 @@ func TestArcheryDDLSwitchAndValidation(t *testing.T) {
 }
 
 func testArcheryDDLSwitchAndValidation(t *testing.T, legacy bool) {
-	arch := httptest.NewServer((&archerytest.Fake{Legacy: legacy}).Handler())
+	arch := httptest.NewTLSServer((&archerytest.Fake{Legacy: legacy}).Handler())
 	defer arch.Close()
 	off := false
-	e := setupWith(t, func(c *config.Config) { c.Archery.AllowDDL = &off; c.Archery.DefaultGroup = "dba" })
+	e := setupWithClient(t, arch.Client(), func(c *config.Config) { c.Archery.AllowDDL = &off; c.Archery.DefaultGroup = "dba" })
 	loginArchery(t, e, arch)
 	out, isErr := e.call(t, "archery_run_sql", map[string]any{"url": arch.URL, "instance": "prod", "database": "d",
 		"sql": "ALTER TABLE t ADD c int", "title": "ddl"})
@@ -146,9 +146,9 @@ func TestArcheryCancelAndRejectedReporting(t *testing.T) {
 
 func testArcheryCancelAndRejectedReporting(t *testing.T, legacy bool) {
 	f := &archerytest.Fake{Legacy: legacy}
-	arch := httptest.NewServer(f.Handler())
+	arch := httptest.NewTLSServer(f.Handler())
 	defer arch.Close()
-	e := setupWith(t, func(c *config.Config) { c.Archery.PollInterval = 20 * time.Millisecond; c.Archery.DefaultGroup = "dba" })
+	e := setupWithClient(t, arch.Client(), func(c *config.Config) { c.Archery.PollInterval = 20 * time.Millisecond; c.Archery.DefaultGroup = "dba" })
 	loginArchery(t, e, arch)
 	args := func(m map[string]any) map[string]any { m["url"] = arch.URL; return m }
 
