@@ -17,9 +17,10 @@ not exist, and an extra argument is refused.
 
 You need an outbound `ssh` client (tunnels use it). Then pick the way that fits the machine: run `go version`.
 
-- **No Go, or Go older than 1.25: download the nightly build** (a prebuilt binary, section 1a). Most machines that only
+- **No Go, or Go older than 1.21: download the nightly build** (a prebuilt binary, section 1a). Most machines that only
   use securl are in this group.
-- **Go 1.25 or newer, for a developer who already builds Go programs: `go install` directly** (section 1b).
+- **Go 1.21 or newer, for a developer who already builds Go programs: `go install` directly** (section 1b). securl needs
+  Go 1.26.9; Go downloads that toolchain by itself, unless `GOTOOLCHAIN=local` is set.
 
 ### 1a. No Go toolchain: the nightly build
 
@@ -44,7 +45,7 @@ securl version                                    # nightly-<date>-<commit>
   a pre-release.
 - The nightly is the newest `master`, built each night when it has changed. It is not a tested release.
 
-### 1b. Go 1.25 or newer: go install
+### 1b. Go 1.21 or newer: go install
 
 ```
 go install github.com/LeafAI/securl@latest

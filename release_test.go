@@ -757,7 +757,7 @@ func TestReadmeGivesBothWaysToGetTheBinary(t *testing.T) {
 		t.Fatalf("the README must show go install (at %d) and the nightly download (at %d)", goAt, dlAt)
 	}
 	flat := strings.Join(strings.Fields(readme), " ")
-	for _, want := range []string{"Go 1.25 or newer, for a Go developer", "No Go toolchain", "the repository has no release tags"} {
+	for _, want := range []string{"Go 1.21 or newer, for a Go developer", "No Go toolchain", "the repository has no release tags"} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("the README must say %q", want)
 		}
