@@ -154,7 +154,7 @@ func section(t *testing.T, from, to string) string {
 	return s[i:j]
 }
 
-// The two ways to get securl are told apart by the machine, not ranked: a person without Go (or with one older than 1.25)
+// The two ways to get securl are told apart by the machine, not ranked: a person without Go (or with one older than 1.21, which cannot fetch the toolchain it needs)
 // downloads the nightly build, a developer who already builds Go programs runs `go install`. The skill has to say how to
 // tell which one applies, and give each its own complete instructions.
 func installText(t *testing.T) (all, nightly, goInstall string) {
@@ -184,7 +184,7 @@ func TestInstallTellsYouHowToChooseAndGivesEachWayInFull(t *testing.T) {
 	all, nightly, goInstall := installText(t)
 	flat := strings.Join(strings.Fields(all), " ")
 	// The choice is made by what is on the machine, and `go version` is how to find out.
-	for _, want := range []string{"go version", "No Go", "Go 1.25 or newer", "download the nightly build", "go install"} {
+	for _, want := range []string{"go version", "No Go", "Go 1.21 or newer", "download the nightly build", "go install"} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("the choice between the two ways must mention %q", want)
 		}

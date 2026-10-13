@@ -10,7 +10,8 @@ them from the answer, so the agent never holds a cookie, a token or a password.
 
 First get the `securl` binary. Pick the way that fits the machine (`go version` tells you):
 
-**Go 1.25 or newer, for a Go developer:** install it directly.
+**Go 1.21 or newer, for a Go developer:** install it directly. securl needs Go 1.26.9, and Go downloads that
+toolchain itself unless `GOTOOLCHAIN=local` is set.
 
 ```
 go install github.com/LeafAI/securl@latest

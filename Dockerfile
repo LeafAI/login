@@ -4,7 +4,7 @@
 #   docker run -it --rm -v securl-data:/home/securl/.config/securl securl vault init
 #   docker run -it --rm -v securl-data:/home/securl/.config/securl securl config init
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.26.9-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
