@@ -68,6 +68,10 @@ type Security struct {
 	// AllowLocalAddresses lets the agent reach this machine's own addresses (loopback, link-local, the cloud
 	// metadata endpoint). Off by default: an agent-chosen URL must not become a way to probe local services.
 	AllowLocalAddresses bool `yaml:"allow_local_addresses"`
+	// AllowArcheryRequests lets the request tool talk to Archery. Off by default: Archery has its own tools, where a
+	// change waits for a person's approval, is checked for DDL, notifies the approvers and counts against the limits.
+	// Through the request tool an agent could post or approve a workflow itself and skip all of that.
+	AllowArcheryRequests bool `yaml:"allow_archery_requests"`
 
 	// LinkTOTP is the unlock factor, a long-period TOTP: with it on, the site, the tunnel address and the one-shot
 	// password are encrypted in the DingTalk link and the person types its code in the page to read them. The default

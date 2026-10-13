@@ -102,6 +102,9 @@ exists only while a person is being asked.
   if a site legitimately redirects to it.
 - Unknown keys in `config.yaml` are an error at startup and in `securl doctor`, with a suggestion ("did you mean
   `allowed_hosts`?"), so a typo cannot silently switch a protection off.
+- The `request` tool refuses Archery, so an agent cannot post or approve a workflow itself and skip the approval, the
+  DDL check and the limits that the `archery_*` tools apply. `security.allow_archery_requests: true` lifts it; it is
+  the owner's switch, and it is off by default.
 - `archery.allow_ddl: false` is enforced by a SQL scanner (comments, strings and `;` aware, MySQL executable
   comments included, `PREPARE`/`EXECUTE` refused, anything unparsable refused), not a pattern match.
 - Every secret securl keeps (logged-in sessions, TOTP secrets) is in one **vault**: AES-256-GCM under a random master
@@ -174,6 +177,7 @@ archery:
 security:
   allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
   allow_local_addresses: false        # true lets the agent reach localhost / link-local / metadata addresses (dev only)
+  allow_archery_requests: false       # true lets the request tool talk to Archery, which skips the approval gate of archery_run_sql
 audit:
   enabled: true              # default; JSON lines (who/what/when, never secrets) in audit.jsonl next to this file
 limits:                      # protect people from request floods; only requests that reach a person count

@@ -64,7 +64,7 @@ pending answer; no field is `required`, because one result type serves both. A t
 |---|---|
 | `securl://sites` | same as `site_list` |
 | `securl://sessions` | same as `session_list` |
-| `securl://policy` | `allowed_hosts`, `local_addresses_allowed`, `max_block_seconds`, `limits` (per site / total / window / reject cool-down), `archery_ddl_allowed`, `audit_enabled`, `human_step_ttl_seconds`, `link_unlock_required`, `sealing_code_required` (which TOTP factors the person is asked for; never a secret or a code) |
+| `securl://policy` | `allowed_hosts`, `local_addresses_allowed`, `max_block_seconds`, `limits` (per site / total / window / reject cool-down), `archery_ddl_allowed`, `archery_requests_allowed`, `audit_enabled`, `human_step_ttl_seconds`, `link_unlock_required`, `sealing_code_required` (which TOTP factors the person is asked for; never a secret or a code) |
 
 **Server instructions.** At connect time the server tells the model how to use the tools: open the vault with `vault_unlock` when it is locked, call `session_open`, on
 `pending` call `session_wait` (never `session_open` again), what to do for each error code, treat cookies as secrets.
@@ -149,6 +149,13 @@ removes them from the answer, so the agent neither sends nor receives a credenti
 without one it answers `no_session` (asking a person is `session_open`'s job). A site that needs no login at all (SkyWalking)
 has no session to look for: the request goes out as it is, with no credential added.
 
+**Archery is refused** (`request_not_allowed`) unless the owner sets `security.allow_archery_requests: true`. A change on
+Archery needs a person's approval, a DDL check, a notification and counts against the limits; the `archery_*` tools do
+all of that, and a raw request would post or approve a workflow without any of it. Archery is recognised by the driver
+the session was opened with, by the configured alias and by the host name, so choosing another `site` in `session_open`
+does not get around it. The switch is the owner's: the agent cannot set it, and `securl://policy` shows it as
+`archery_requests_allowed`.
+
 Input
 ```jsonc
 { "type":"object", "required":["url","method","path"], "additionalProperties":false, "properties":{
@@ -187,7 +194,7 @@ headers. A cookie the site rotates is kept for the next call (and stored in the 
 it; the layers that do not depend on the scrubber are that the agent cannot send credentials, can only reach the
 session's own site (an absolute path on that origin), and never follows a redirect off the site or down from https.
 
-Errors: `vault_locked`/`vault_not_initialized`, `no_session`, `host_not_allowed`, `invalid_argument` (the refusals above,
+Errors: `vault_locked`/`vault_not_initialized`, `no_session`, `host_not_allowed`, `request_not_allowed` (Archery, see above), `invalid_argument` (the refusals above,
 before anything is sent), `session_expired`, `site_unreachable` (the message never contains the URL or a credential).
 Each call is audited as `request`: method, path (never the query), status, size, host.
 

@@ -148,6 +148,7 @@ securl config totp off link       # switch off, keep the secret (so your authent
 | `rate_limited` | people were asked too often, or the site was just rejected | wait for the retry time; do not loop. Raise `limits:` only if the volume is legitimate |
 | `unsupported_site` | no driver for that host | add `aliases:` or pass `site` |
 | `host_not_allowed` | outside `security.allowed_hosts`, or a local address (`127.0.0.1`, `localhost`, link-local, metadata) while `security.allow_local_addresses` is off | add the host, or set `allow_local_addresses: true` for a development service on this machine |
+| `request_not_allowed` | the `request` tool was pointed at Archery | use the `archery_*` tools (they keep the approval gate); to allow raw requests anyway, set `security.allow_archery_requests: true` |
 | `ddl_disabled` / `sql_check_failed` / `archery_error` | Archery tool refusals | see `MCP_TOOLS.md` |
 
 Page-side messages (shown to the human): *Key fingerprint does not match* or *link is incomplete* mean the link

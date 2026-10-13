@@ -157,6 +157,8 @@ The server starts **locked**. Follow this order and do not skip a step.
    - Big answers are cut at `max_response_bytes` (default 262144, at most 1048576); `truncated` and `total_bytes` say so.
      Ask for less (`per_page`, `fields`, a narrower path) instead of raising the limit.
    - `redactions` counts the secret values removed from the answer. Treat any `[REDACTED]` as intended.
+   - Archery is not reachable with `request` (`request_not_allowed`): use the `archery_*` tools below. Only the owner
+     can lift this (`security.allow_archery_requests`); do not look for another way around it.
 6. A site that needs no login (SkyWalking) works with `request` directly; `session_open` just confirms `auth: none`.
 
 When `request` answers `401` or `session_expired`, the session ended: call `session_open` with `force_refresh: true`.

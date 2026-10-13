@@ -34,7 +34,7 @@ func TestEveryToolTheDocumentsNameExists(t *testing.T) {
 	notTools := map[string]bool{
 		"session_expired": true, "vault_locked": true, "vault_not_initialized": true, // error codes
 		"site_unreachable": true, "archery_error": true, // error codes
-		"site_options": true, "archery_ddl_allowed": true, // configuration key and policy field
+		"site_options": true, "archery_ddl_allowed": true, "archery_requests_allowed": true, // configuration key and policy fields
 		"archery_submit_sql": true, // named in order to say it does not exist
 	}
 	for _, f := range documents {

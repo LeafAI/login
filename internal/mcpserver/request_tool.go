@@ -40,6 +40,9 @@ func (s *Server) request(ctx context.Context, _ *mcp.CallToolRequest, in Request
 	if terr != nil {
 		return nil, terr
 	}
+	if !s.cfg.Security.AllowArcheryRequests && s.isArchery(siteName, base) {
+		return nil, archeryRequestRefusal()
+	}
 	px := &proxy.Proxy{HC: s.hc, MaxResponseBytes: in.MaxResponseBytes}
 	res, err := px.Do(ctx, sess, proxy.Request{
 		Base: base, Method: in.Method, Path: in.Path, Query: multiValues(in.Query), Headers: in.Headers,
@@ -60,6 +63,26 @@ func (s *Server) request(ctx context.Context, _ *mcp.CallToolRequest, in Request
 		out.Hint = requestExpiredHint
 	}
 	return out, nil
+}
+
+// archeryDriver is the driver name of Archery, the one site the request tool refuses unless the owner allows it.
+const archeryDriver = "archery"
+
+// isArchery tells whether a request is for Archery by every way the server knows: the driver the session was opened
+// with, the configured alias, and the host name. An agent picks the site argument of session_open, so the driver
+// name alone would let it register an Archery host as some other site and walk around the filter.
+func (s *Server) isArchery(sessionSite string, base *url.URL) bool {
+	if sessionSite == archeryDriver || s.alias(base) == archeryDriver {
+		return true
+	}
+	d, err := site.Resolve(archeryDriver, nil)
+	return err == nil && d.Match(base)
+}
+
+func archeryRequestRefusal() *ToolError {
+	e := errf("request_not_allowed", false, "the request tool does not talk to Archery: a change there needs a person's approval, and this tool would skip it")
+	e.Hint = "Use archery_instances, archery_groups, archery_query and archery_run_sql. Only the owner can lift this, with security.allow_archery_requests: true in the securl config; do not look for another way around it."
+	return e
 }
 
 // sessionFor returns the session a request goes out with. A request only ever uses a session that exists: asking a

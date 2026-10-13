@@ -17,8 +17,10 @@ type Policy struct {
 	MaxBlockSeconds       int          `json:"max_block_seconds"`
 	Limits                PolicyLimits `json:"limits"`
 	DDLAllowed            bool         `json:"archery_ddl_allowed"`
-	AuditEnabled          bool         `json:"audit_enabled"`
-	HumanTTLSeconds       int          `json:"human_step_ttl_seconds"`
+	// ArcheryRequestsAllowed: false (the default) means the request tool refuses Archery; use the archery_* tools.
+	ArcheryRequestsAllowed bool `json:"archery_requests_allowed"`
+	AuditEnabled           bool `json:"audit_enabled"`
+	HumanTTLSeconds        int  `json:"human_step_ttl_seconds"`
 	// LinkUnlockRequired: the person must type a long-period code in the page to read the details of a login.
 	LinkUnlockRequired bool `json:"link_unlock_required"`
 	// SealingCodeRequired: the person must type a short-period code in the page, and what they type is sealed with it.
@@ -43,7 +45,7 @@ func (s *Server) policy() Policy {
 		AllowedHosts: hosts, LocalAddressesAllowed: s.cfg.Security.AllowLocalAddresses, MaxBlockSeconds: int(s.maxBlock(0).Seconds()),
 		Limits: PolicyLimits{PerSite: l.PerSite, Total: l.Total,
 			WindowSeconds: int(l.Window.Seconds()), RejectCooldownSeconds: int(l.RejectCooldown.Seconds())},
-		DDLAllowed: s.cfg.Archery.DDLAllowed(), AuditEnabled: s.cfg.Audit.On(),
+		DDLAllowed: s.cfg.Archery.DDLAllowed(), ArcheryRequestsAllowed: s.cfg.Security.AllowArcheryRequests, AuditEnabled: s.cfg.Audit.On(),
 		HumanTTLSeconds:    int(s.cfg.Web.TTL.Seconds()),
 		LinkUnlockRequired: s.cfg.Security.LinkTOTP.Enabled, SealingCodeRequired: s.cfg.Security.SealTOTP.Enabled,
 		VaultState: s.vault.State().String(),
