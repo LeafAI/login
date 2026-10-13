@@ -74,13 +74,19 @@ func (rs *rqSite) count() int { rs.mu.Lock(); defer rs.mu.Unlock(); return len(r
 // withSession starts an open server that already holds a session for the site, as if a person had logged in.
 func withSession(t *testing.T, rs *rqSite, tweak func(*config.Config)) *gateEnv {
 	t.Helper()
+	return withSessionAs(t, rs, "gitlab", tweak)
+}
+
+// withSessionAs is withSession for a site that the configuration names siteName.
+func withSessionAs(t *testing.T, rs *rqSite, siteName string, tweak func(*config.Config)) *gateEnv {
+	t.Helper()
 	g := gateServer(t, "open", func(c *config.Config) {
-		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "gitlab"}
+		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): siteName}
 		if tweak != nil {
 			tweak(c)
 		}
 	})
-	d, _ := site.Resolve("gitlab", nil)
+	d, _ := site.Resolve(siteName, nil)
 	base := mustURL(t, rs.URL)
 	g.s.core.cache.Put(base, d, &site.Session{
 		Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}},
@@ -685,6 +691,92 @@ func TestTheQueryAndFormSchemasAcceptAPlainStringAndAListAndRefuseAnObject(t *te
 			if err := validate(bad); err == nil {
 				t.Errorf("the schema accepts %s, which the tool refuses", bad)
 			}
+		}
+	}
+}
+
+// Archery has its own tools because a workflow there needs a person's approval, a DDL check, a notification and a rate
+// limit. Through the request tool an agent could POST the workflow, or approve it, and skip every one of them.
+func TestRequestRefusesArcheryUnlessTheOwnerSwitchesTheFilterOff(t *testing.T) {
+	rs := newRqSite(t)
+	g := withSessionAs(t, rs, "archery", nil)
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "POST", "path": "/api/v1/workflow/", "json": map[string]any{"sql_content": "DROP TABLE t"}})
+	if !isErr || out["code"] != "request_not_allowed" {
+		t.Fatalf("an Archery request must be refused by default: %v", out)
+	}
+	for _, want := range []string{"archery_run_sql", "security.allow_archery_requests"} {
+		if raw, _ := json.Marshal(out); !strings.Contains(string(raw), want) {
+			t.Errorf("the refusal must mention %q: %s", want, raw)
+		}
+	}
+	if rs.count() != 0 {
+		t.Fatalf("a refused request must send nothing, %d went out", rs.count())
+	}
+
+	on := withSessionAs(t, rs, "archery", func(c *config.Config) { c.Security.AllowArcheryRequests = true })
+	if out, isErr := on.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/api/v1/instance/"}); isErr || out["status"] != float64(200) {
+		t.Errorf("with the filter off the request goes out: %v", out)
+	}
+	if rs.count() != 1 {
+		t.Errorf("%d requests", rs.count())
+	}
+}
+
+// A session opened with site=archery on a host whose name does not say so is still an Archery session.
+func TestRequestRefusesASessionThatWasOpenedAsArchery(t *testing.T) {
+	rs := newRqSite(t)
+	g := gateServer(t, "open", nil)
+	d, _ := site.Resolve("archery", nil)
+	g.s.core.cache.Put(mustURL(t, rs.URL), d, &site.Session{Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}}})
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/x"})
+	if !isErr || out["code"] != "request_not_allowed" {
+		t.Errorf("%v", out)
+	}
+	if rs.count() != 0 {
+		t.Errorf("%d requests went out", rs.count())
+	}
+}
+
+func TestRequestStillServesOtherSitesWhileArcheryIsFiltered(t *testing.T) {
+	rs := newRqSite(t)
+	g := withSession(t, rs, nil)
+	if out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/x"}); isErr {
+		t.Errorf("%v", out)
+	}
+}
+
+func TestThePolicySaysWhetherArcheryRequestsAreAllowed(t *testing.T) {
+	g := gateServer(t, "open", nil)
+	if g.s.policy().ArcheryRequestsAllowed {
+		t.Error("the default must be: not allowed")
+	}
+	g2 := gateServer(t, "open", func(c *config.Config) { c.Security.AllowArcheryRequests = true })
+	if !g2.s.policy().ArcheryRequestsAllowed {
+		t.Error("the policy must show the switch")
+	}
+}
+
+// The agent chooses the site argument of session_open, so a session stored under another driver name must not open
+// Archery to the request tool: the host name and the alias say what the site is.
+func TestRequestRefusesArcheryWhateverDriverTheSessionWasOpenedWith(t *testing.T) {
+	for name, tc := range map[string]struct {
+		host  string
+		alias string
+	}{
+		"host name":        {"archery.corp.example", ""},
+		"configured alias": {"sql.corp.example", "archery"},
+	} {
+		g := gateServer(t, "open", func(c *config.Config) {
+			if tc.alias != "" {
+				c.Aliases = map[string]string{tc.host: tc.alias}
+			}
+		})
+		base := mustURL(t, "https://"+tc.host)
+		d, _ := site.Resolve("gitlab", nil)
+		g.s.core.cache.Put(base, d, &site.Session{Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}}})
+		out, isErr := g.call(t, toolRequest, map[string]any{"url": base.String(), "method": "GET", "path": "/x"})
+		if !isErr || out["code"] != "request_not_allowed" {
+			t.Errorf("%s: %v", name, out)
 		}
 	}
 }
