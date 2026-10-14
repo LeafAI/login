@@ -1,8 +1,12 @@
-package archery
+// Package sqlscan reads SQL the way a server would, just far enough to tell what kind of statements a text holds.
+//
+// It is shared by Archery (archery.allow_ddl) and by the direct database tools, so the two cannot disagree about what
+// counts as DDL. It is a lexical scan, not a parser: it never executes or rewrites anything.
+package sqlscan
 
 import "strings"
 
-// ddlWords are the statement keywords that archery.allow_ddl: false refuses. PREPARE and EXECUTE are
+// ddlWords are the statement keywords that archery.allow_ddl: false (and databases[].allow_ddl: false) refuse. PREPARE and EXECUTE are
 // included because they run SQL the scanner cannot see.
 var ddlWords = map[string]bool{
 	"create": true, "alter": true, "drop": true, "truncate": true, "rename": true,

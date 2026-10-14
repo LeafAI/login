@@ -1,4 +1,4 @@
-package archery
+package sqlscan
 
 import (
 	"strings"

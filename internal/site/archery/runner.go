@@ -13,6 +13,7 @@ import (
 
 	"github.com/LeafAI/securl/internal/audit"
 	"github.com/LeafAI/securl/internal/notify"
+	"github.com/LeafAI/securl/internal/sqlscan"
 )
 
 // Errors with stable meaning for the MCP layer.
@@ -114,7 +115,7 @@ func findInstance(is []Instance, name string) (Instance, error) {
 
 // Submit validates, checks and submits the SQL, then tells the approvers. It does not wait.
 func (t *Tracker) Submit(ctx context.Context, c *Client, n Notifier, r SubmitRequest, approvalTimeout time.Duration) (*Outcome, error) {
-	if !t.AllowDDL && HasDDL(r.SQL) {
+	if !t.AllowDDL && sqlscan.HasDDL(r.SQL) {
 		return nil, ErrDDLDisabled
 	}
 	groups, err := c.Groups(ctx)
