@@ -259,3 +259,28 @@ func TestClientKeepsItsTimeout(t *testing.T) {
 		t.Errorf("default timeout should be 30s: %v", c.Timeout)
 	}
 }
+
+// A database connection is not HTTP, but it must meet the same rule: the address that is connected to is checked after
+// name resolution, so a name that points at this machine is refused too.
+func TestDialContextRefusesLocalAddressesUnlessAllowed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	for _, target := range []string{"127.0.0.1:" + port, "localhost:" + port} {
+		c, err := DialContext(false)(context.Background(), "tcp", target)
+		if err == nil {
+			c.Close()
+			t.Errorf("dialing %s must be refused", target)
+		} else if !errors.Is(err, ErrBlocked) && !strings.Contains(err.Error(), "not permitted") {
+			t.Errorf("dialing %s failed for another reason: %v", target, err)
+		}
+	}
+	c, err := DialContext(true)(context.Background(), "tcp", "127.0.0.1:"+port)
+	if err != nil {
+		t.Fatalf("with local addresses allowed the dial must work: %v", err)
+	}
+	c.Close()
+}

@@ -8,6 +8,7 @@
 package netguard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -109,6 +110,13 @@ func New(p Policy) *http.Client {
 		Transport:     &guard{allowLocal: p.AllowLocal, proxy: proxy, direct: direct, viaProxy: viaProxy},
 		CheckRedirect: redirectPolicy(p.AllowedHosts),
 	}
+}
+
+// DialContext returns a function that opens a TCP connection under the same rule as the HTTP client: unless allowLocal is
+// set, the address about to be connected to (after name resolution) must not be loopback, link-local or a cloud
+// metadata address. The database drivers use it.
+func DialContext(allowLocal bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return newDialer(allowLocal).DialContext
 }
 
 // newDialer returns the dialer for direct connections. Unless local addresses are allowed it checks the
