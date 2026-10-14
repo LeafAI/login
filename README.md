@@ -106,8 +106,8 @@ exists only while a person is being asked.
   DDL check and the limits that the `archery_*` tools apply. `security.allow_archery_requests: true` lifts it; it is
   the owner's switch, and it is off by default.
 - **Databases** (`databases:`) are reachable only by the names the owner lists; an agent supplies no host, port or
-  connection string. The account is typed by a person on the usual page and kept in the vault, and is never in an answer,
-  an error, the audit log or a message (a query that echoes it has it removed). A `read_only` target runs every statement
+  connection string. The account is typed by a person on the usual page and kept in the vault, and the password is never in an answer,
+  an error, the audit log or a message (a query that echoes it has it removed; the user name is not a secret and is not). A `read_only` target runs every statement
   in a read-only transaction on a read-only session, after a lexical check that it is one statement that only reads; a
   `read_write` target rolls back a change that touches more than `max_changed_rows`, refuses DDL unless `allow_ddl` is
   on, and tells the team in DingTalk afterwards. `environment: prod` is refused when the configuration loads. securl

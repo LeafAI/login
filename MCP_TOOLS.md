@@ -354,9 +354,13 @@ Archery, where a person approves each change.
 
 The account is typed once by a person: `session_open` with `url: "db://<target>"` sends the usual DingTalk link, the page
 asks for a username and a password, and securl checks them by connecting. The pair is kept in the vault like any other
-session; `session_close` with the same URL forgets it. The agent never sees it: it appears in no answer, no error, no
-audit line and no message, and an answer that echoes it (a query of `current_setting`, a table that holds it) has it
-removed (`redactions` counts them). A password the database stops accepting ends the session (`session_expired`).
+session; `session_close` with the same URL forgets it. The agent never sees the **password**: it appears in no answer, no
+error, no audit line and no message, and an answer that echoes it (a query of `current_setting`, a table that holds it)
+has it removed from every value, column name and error (`redactions` counts them). The user name is not a secret (the
+database tells it to anybody in `CURRENT_USER()` and in every list of grants) and is not removed: removing it damaged
+ordinary answers, because a company or product name is usually in the name of the account and of every database it
+owns. It still appears in no audit line and no message. A password the database stops accepting ends the session
+(`session_expired`).
 
 `db_targets` (no input) answers `{targets: [{name, driver, environment, mode, allow_ddl, databases, max_rows,
 max_changed_rows, has_session}]}`. It works while the vault is locked (`has_session` is then `false`).
