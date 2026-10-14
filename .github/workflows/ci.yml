@@ -11,6 +11,27 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Throwaway servers for the database integration tests. The passwords are the fixture's (scripts/dbtest): the servers
+    # hold nothing and are reachable from this job only.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: rootpw
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rootpw
+          MYSQL_DATABASE: appdb
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -prootpw --silent" --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      SECURL_TEST_PG: 127.0.0.1:5432
+      SECURL_TEST_MYSQL: 127.0.0.1:3306
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -23,6 +44,13 @@ jobs:
       - run: npm install -g playwright && npx playwright install --with-deps chromium
       # Real-ssh tunnel test runs a throwaway sshd (it skips itself if sshd is unavailable).
       - run: sudo mkdir -p /run/sshd
+      # The MySQL image restarts once after its init scripts; wait until it answers on TCP before loading the fixture.
+      - name: Load the database fixtures
+        run: |
+          for i in $(seq 1 60); do mysqladmin ping -h 127.0.0.1 -uroot -prootpw --silent && break; sleep 2; done
+          sleep 3
+          PGPASSWORD=rootpw psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f scripts/dbtest/postgres.sql
+          mysql -h 127.0.0.1 -uroot -prootpw appdb < scripts/dbtest/mysql.sql
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...

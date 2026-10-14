@@ -352,6 +352,10 @@ func TestEveryFieldTheSkillNamesIsOneTheToolsTake(t *testing.T) {
 		"human_timeout": true, "user_rejected": true, "bad_credentials": true, "rate_limited": true, "host_not_allowed": true,
 		"tunnel_unavailable": true, "notify_failed": true, "invalid_argument": true, "no_session": true, "vault_locked": true,
 		"vault_not_initialized": true, "session_expired": true, "site_unreachable": true, "request_not_allowed": true,
+		"unknown_target": true, "database_not_allowed": true, "target_read_only": true, "not_read_only": true, "too_many_rows": true,
+		"statement_timeout": true, "ddl_disabled": true, "sql_error": true,
+		// Values of a database target's mode.
+		"read_only": true, "read_write": true,
 		// Parameters of the sites' own APIs, used as examples of what goes into `query`.
 		"per_page": true,
 	}

@@ -310,3 +310,49 @@ func multiValues(in map[string]multiValue) map[string][]string {
 	}
 	return out
 }
+
+// Databases
+
+// DBTargetInfo describes one database target. It never carries a host, a port or an account: the owner's configuration
+// holds those, and the agent has no use for them.
+type DBTargetInfo struct {
+	Name           string   `json:"name"`
+	Driver         string   `json:"driver"`
+	Environment    string   `json:"environment"`
+	Mode           string   `json:"mode"`
+	AllowDDL       bool     `json:"allow_ddl"`
+	Databases      []string `json:"databases,omitempty"`
+	MaxRows        int      `json:"max_rows"`
+	MaxChangedRows int      `json:"max_changed_rows"`
+	HasSession     bool     `json:"has_session"`
+}
+
+type DBTargetsOutput struct {
+	Targets []DBTargetInfo `json:"targets"`
+}
+
+type DBQueryInput struct {
+	Target   string `json:"target" jsonschema:"A target name from db_targets."`
+	Database string `json:"database,omitempty" jsonschema:"The database to use. Optional when the target lists exactly one."`
+	SQL      string `json:"sql" jsonschema:"A single read-only statement: SELECT, SHOW, EXPLAIN, DESCRIBE, WITH ... SELECT."`
+	Limit    int    `json:"limit,omitempty" jsonschema:"At most this many rows (default 1000; the target sets a ceiling)."`
+}
+
+type DBQueryOutput struct {
+	Columns    []string `json:"columns"`
+	Rows       [][]any  `json:"rows"`
+	Truncated  bool     `json:"truncated,omitempty"`
+	Redactions int      `json:"redactions"`
+}
+
+type DBExecInput struct {
+	Target   string `json:"target" jsonschema:"A target name from db_targets whose mode is read_write."`
+	Database string `json:"database,omitempty" jsonschema:"The database to use. Optional when the target lists exactly one."`
+	SQL      string `json:"sql" jsonschema:"The statement or statements that change data. DDL needs allow_ddl on the target."`
+	Reason   string `json:"reason" jsonschema:"Why this change is made. The team reads it in DingTalk after the change."`
+}
+
+type DBExecOutput struct {
+	RowsAffected int64 `json:"rows_affected"`
+	Notified     bool  `json:"notified"`
+}

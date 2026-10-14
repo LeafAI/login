@@ -149,6 +149,13 @@ securl config totp off link       # switch off, keep the secret (so your authent
 | `unsupported_site` | no driver for that host | add `aliases:` or pass `site` |
 | `host_not_allowed` | outside `security.allowed_hosts`, or a local address (`127.0.0.1`, `localhost`, link-local, metadata) while `security.allow_local_addresses` is off | add the host, or set `allow_local_addresses: true` for a development service on this machine |
 | `request_not_allowed` | the `request` tool was pointed at Archery | use the `archery_*` tools (they keep the approval gate); to allow raw requests anyway, set `security.allow_archery_requests: true` |
+| `unknown_target` | the database name is not in `databases:` | `db_targets` lists the names; the owner adds one in the configuration |
+| `database_not_allowed` | the database is not in that target's `databases:` list | use one it lists |
+| `target_read_only` | `db_exec` on a target with `mode: read_only` | the owner sets `mode: read_write` if changes are intended |
+| `not_read_only` | `db_query` was given more than one statement, or one that is not a plain read | one `SELECT`/`SHOW`/`EXPLAIN`/`DESCRIBE`; changes go through `db_exec` |
+| `too_many_rows` | a change touched more than `max_changed_rows` and was rolled back | narrow the `WHERE`, or the owner raises `max_changed_rows` |
+| `statement_timeout` | a statement ran longer than `statement_timeout` | narrow it, or the owner raises the timeout |
+| `sql_error` | the database refused the statement (syntax, permission, missing table) | read the message: it is the database's own |
 | `ddl_disabled` / `sql_check_failed` / `archery_error` | Archery tool refusals | see `MCP_TOOLS.md` |
 
 Page-side messages (shown to the human): *Key fingerprint does not match* or *link is incomplete* mean the link
@@ -158,6 +165,17 @@ minutes. *refused the submission (400…)* usually means the link belongs to an 
 out of date, so open the newest message. It does not prove that the answer was lost: if the login server already had it,
 it closes its tunnel at once, and the page can lose the reply. When the AI agent has said that it is done, there is
 nothing more to do.
+
+### Database targets
+
+Nothing in the file holds a database account.
+
+A target in `databases:` is checked when the configuration loads (`securl doctor` shows the error): the name, the driver,
+the host (a name or an address, no port or scheme), the environment (`dev`, `test` or `staging`), the mode, and the
+limits. Open a session with `session_open` and `url: db://<name>`; a person gets the usual link and types the database
+account. A server that cannot be reached is `site_unreachable`; a refused account is `bad_credentials` and leaves no
+session. A host on this machine needs `security.allow_local_addresses: true`. A server certificate that cannot be verified
+needs the right CA on this machine, or (knowing what it gives up) `tls: skip-verify`.
 
 ## 8. Not supported (yet)
 

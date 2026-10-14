@@ -48,7 +48,7 @@ func TestEveryToolHasTitleAndOutputSchema(t *testing.T) {
 	}
 	// The tool set is the product's surface. A rename or an addition shows up here as a change to this list.
 	want := []string{"archery_cancel", "archery_groups", "archery_instances", "archery_query", "archery_run_sql", "archery_wait",
-		"archery_workflow_status", "request", "session_close", "session_list", "session_open", "session_wait", "site_list", "vault_status", "vault_unlock"}
+		"archery_workflow_status", "db_exec", "db_query", "db_targets", "request", "session_close", "session_list", "session_open", "session_wait", "site_list", "vault_status", "vault_unlock"}
 	var got []string
 	for _, tl := range res.Tools {
 		got = append(got, tl.Name)

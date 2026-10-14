@@ -105,6 +105,14 @@ exists only while a person is being asked.
 - The `request` tool refuses Archery, so an agent cannot post or approve a workflow itself and skip the approval, the
   DDL check and the limits that the `archery_*` tools apply. `security.allow_archery_requests: true` lifts it; it is
   the owner's switch, and it is off by default.
+- **Databases** (`databases:`) are reachable only by the names the owner lists; an agent supplies no host, port or
+  connection string. The account is typed by a person on the usual page and kept in the vault, and is never in an answer,
+  an error, the audit log or a message (a query that echoes it has it removed). A `read_only` target runs every statement
+  in a read-only transaction on a read-only session, after a lexical check that it is one statement that only reads; a
+  `read_write` target rolls back a change that touches more than `max_changed_rows`, refuses DDL unless `allow_ddl` is
+  on, and tells the team in DingTalk afterwards. `environment: prod` is refused when the configuration loads. securl
+  cannot know that a host is really not production, and an agent can read whatever the account can: give the account
+  only what an agent may do there, and no `dblink`, `postgres_fdw` or `FEDERATED` route to a production server.
 - `archery.allow_ddl: false` is enforced by a SQL scanner (comments, strings and `;` aware, MySQL executable
   comments included, `PREPARE`/`EXECUTE` refused, anything unparsable refused), not a pattern match.
 - Every secret securl keeps (logged-in sessions, TOTP secrets) is in one **vault**: AES-256-GCM under a random master
@@ -178,6 +186,19 @@ security:
   allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
   allow_local_addresses: false        # true lets the agent reach localhost / link-local / metadata addresses (dev only)
   allow_archery_requests: false       # true lets the request tool talk to Archery, which skips the approval gate of archery_run_sql
+databases:                   # PostgreSQL / MySQL for dev, test or staging; production is refused (use Archery)
+  - name: gm-dev-pg          # what an agent calls it; the agent never supplies a host or a port
+    driver: postgres         # postgres | mysql
+    host: pg.dev.corp.example
+    # port: 5432             # default: the driver's own
+    environment: dev         # dev | test | staging (required)
+    databases: [appdb]       # the databases an agent may use; empty = any the account can open
+    mode: read_only          # read_only (default) | read_write
+    # allow_ddl: false       # read_write only: allow CREATE/ALTER/DROP/TRUNCATE/RENAME
+    # tls: verify            # verify (default) | skip-verify | disable
+    # max_rows: 1000         # rows one query may return (at most 10000)
+    # max_changed_rows: 1000 # a change that touches more rows is rolled back
+    # statement_timeout: 30s # per statement (at most 5m)
 audit:
   enabled: true              # default; JSON lines (who/what/when, never secrets) in audit.jsonl next to this file
 limits:                      # protect people from request floods; only requests that reach a person count
@@ -211,7 +232,7 @@ Every tool has a title and an output schema. Read-only resources: `securl://site
 `securl://policy` (the limits that apply to the agent). The server also sends instructions on how to use the tools.
 
 `vault_status`, `vault_unlock`, `session_open`, `session_wait`, `site_list`, `session_list`, `session_close`, `archery_instances`, `archery_groups`, `archery_query`,
-`archery_run_sql`, `archery_wait`, `archery_workflow_status`, `archery_cancel`.
+`archery_run_sql`, `archery_wait`, `archery_workflow_status`, `archery_cancel`, `db_targets`, `db_query`, `db_exec`.
 Long operations return a `pending` result with an id after `max_block_seconds`; resume with `session_wait` /
 `archery_wait`.
 

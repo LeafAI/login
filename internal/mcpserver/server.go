@@ -51,6 +51,7 @@ type Server struct {
 	audit   *audit.Log
 	limiter *ratelimit.Limiter
 	vault   *vault.Vault
+	db      dbOpener
 
 	mu       sync.Mutex
 	core     *core     // nil while the vault is locked
@@ -80,7 +81,7 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	if err := ApplySiteOptions(cfg); err != nil {
 		return nil, nil, err
 	}
-	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log}
+	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log, db: realDB{}}
 	if s.hc == nil {
 		s.hc = netguard.New(netguard.Policy{AllowLocal: cfg.Security.AllowLocalAddresses, AllowedHosts: cfg.Security.AllowedHosts})
 	}
@@ -185,6 +186,18 @@ func (s *Server) register(m *mcp.Server) error {
 		func() error {
 			return addTool(m, s.observe, spec[RequestOutput]{toolRequest, "Send an authenticated HTTP request",
 				"Send an HTTP request to a site you hold a session for. The gateway puts the session's cookies and tokens into the request and removes them from the answer, so you never see or send a credential: do not put a Cookie or Authorization header in it (refused). Only the site of the session can be reached, by an absolute path; redirects are returned unless follow_redirects is set, and never followed to another site. Needs a session: call " + toolSessionOpen + " first (it asks a person once). A 401 means the session ended: call " + toolSessionOpen + " with force_refresh.", open(false)}, s.request)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[DBTargetsOutput]{toolDBTargets, "List database targets",
+				"List the databases the owner has made reachable: name, engine, environment, whether it takes changes, which databases it offers and whether a session exists. Never a host or an account.", ro}, s.dbTargets)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[DBQueryOutput]{toolDBQuery, "Run a read-only SQL statement",
+				"Run one read-only statement (SELECT, SHOW, EXPLAIN, DESCRIBE) on a database target, as the account a person typed for it. Needs a session: call " + toolSessionOpen + " with url db://<target> first. Rows are limited in number and size; the answer says when it was cut. The account's password never appears in an answer.", open(true)}, s.dbQuery)
+		},
+		func() error {
+			return addTool(m, s.observe, spec[DBExecOutput]{toolDBExec, "Change data on a database",
+				"Change data on a database target whose mode is read_write, as the account a person typed for it. Needs a session and a reason; the team is told in DingTalk after the change. A change that touches more rows than the target allows is rolled back. Schema changes need allow_ddl on the target. Production databases are not reachable: use archery_run_sql.", &mcp.ToolAnnotations{DestructiveHint: &destructive}}, s.dbExec)
 		},
 		func() error {
 			return addTool(m, s.observe, spec[SitesOutput]{toolSiteList, "List supported websites", "List the websites securl can open a session on.", ro}, s.sites)

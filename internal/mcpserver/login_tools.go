@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/dbsite"
 	"github.com/LeafAI/securl/internal/flow"
 	"github.com/LeafAI/securl/internal/netguard"
 	"github.com/LeafAI/securl/internal/ratelimit"
@@ -61,20 +62,30 @@ func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw,
 	if terr != nil {
 		return nil, terr
 	}
-	base, terr := baseOf(raw)
-	if terr != nil {
-		return nil, terr
-	}
-	if terr := checkHost(s.cfg, base); terr != nil {
-		return nil, terr
-	}
-	if siteName == "" {
-		siteName = s.alias(base)
-	}
-	base = s.root(base)
-	d, err := site.Resolve(siteName, base)
-	if err != nil {
-		return nil, errf("unsupported_site", false, "%v", err)
+	var (
+		base *url.URL
+		d    site.Driver
+	)
+	if strings.HasPrefix(strings.ToLower(raw), dbsite.Scheme+":") {
+		if _, base, terr = s.databaseTarget(raw); terr != nil {
+			return nil, terr
+		}
+		d = s.openDriver()
+	} else {
+		var err error
+		if base, terr = baseOf(raw); terr != nil {
+			return nil, terr
+		}
+		if terr := checkHost(s.cfg, base); terr != nil {
+			return nil, terr
+		}
+		if siteName == "" {
+			siteName = s.alias(base)
+		}
+		base = s.root(base)
+		if d, err = site.Resolve(siteName, base); err != nil {
+			return nil, errf("unsupported_site", false, "%v", err)
+		}
 	}
 	if !d.NeedsLogin() {
 		sess, err := d.Login(ctx, base, nil, s.hc)
@@ -257,11 +268,20 @@ func (s *Server) logout(_ context.Context, _ *mcp.CallToolRequest, in LogoutInpu
 	case in.All:
 		return LogoutOutput{Removed: c.cache.Clear()}, nil
 	}
-	base, terr := baseOf(in.URL)
-	if terr != nil {
-		return nil, terr
+	var base *url.URL
+	if strings.HasPrefix(strings.ToLower(in.URL), dbsite.Scheme+":") {
+		_, b, terr := s.databaseTarget(in.URL)
+		if terr != nil {
+			return nil, terr
+		}
+		base = b
+	} else {
+		b, terr := baseOf(in.URL)
+		if terr != nil {
+			return nil, terr
+		}
+		base = s.root(b)
 	}
-	base = s.root(base)
 	n := 0
 	if c.cache.Delete(session.Key(base)) {
 		n++

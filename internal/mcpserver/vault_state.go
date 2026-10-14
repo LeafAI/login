@@ -4,6 +4,7 @@ import (
 	"github.com/LeafAI/securl/internal/flow"
 	"github.com/LeafAI/securl/internal/keyring"
 	"github.com/LeafAI/securl/internal/session"
+	"github.com/LeafAI/securl/internal/site"
 	"github.com/LeafAI/securl/internal/site/archery"
 	"github.com/LeafAI/securl/internal/vault"
 )
@@ -29,6 +30,11 @@ func (s *Server) openCore() error {
 	}
 	if sealSrc != nil {
 		sealing = sealSrc
+	}
+	// The driver of the database targets is found by name when a stored session is brought back, so it is registered
+	// like any site driver. It matches no URL: only the database tools and db:// reach it.
+	if len(s.cfg.Databases) > 0 {
+		site.Replace(s.openDriver())
 	}
 	c.cache = session.NewPersistent(session.NewStore(s.vault))
 	c.cache.Log = s.log
