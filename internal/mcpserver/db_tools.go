@@ -118,9 +118,12 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// scrubber removes the account's own values from anything that goes back to the agent.
+// scrubber removes the account's password from anything that goes back to the agent. The user name is left alone: it is
+// not a secret (the database says it to anybody who asks, in CURRENT_USER() and in every list of grants), and removing it
+// damaged ordinary answers, since the name of a company or a product is usually in the name of the account and of every
+// database it owns.
 func scrubber(sess *site.Session) *redact.Scrubber {
-	return redact.New([]string{sess.Tokens[dbsite.TokenPassword], sess.Tokens[dbsite.TokenUser]})
+	return redact.New([]string{sess.Tokens[dbsite.TokenPassword]})
 }
 
 func (s *Server) dbTargets(_ context.Context, _ *mcp.CallToolRequest, _ Empty) (any, *ToolError) {

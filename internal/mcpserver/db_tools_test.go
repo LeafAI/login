@@ -23,6 +23,7 @@ type fakeDB struct {
 	queries  []string
 	execs    []string
 	loginErr error
+	cols     []string
 	queryErr error
 	execErr  error
 	rows     [][]any
@@ -53,7 +54,11 @@ func (c *fakeConn) Query(_ context.Context, sql string, limit int) (*dbexec.Quer
 	if c.f.queryErr != nil {
 		return nil, c.f.queryErr
 	}
-	return &dbexec.QueryResult{Columns: []string{"id"}, Rows: c.f.rows}, nil
+	cols := c.f.cols
+	if cols == nil {
+		cols = []string{"id"}
+	}
+	return &dbexec.QueryResult{Columns: cols, Rows: c.f.rows}, nil
 }
 func (c *fakeConn) Exec(_ context.Context, sql string) (*dbexec.ExecResult, error) {
 	c.f.mu.Lock()
@@ -188,8 +193,8 @@ func TestDBQueryRunsAsThePersonWhoTypedTheAccount(t *testing.T) {
 	if rows, _ := out["rows"].([]any); len(rows) != 2 {
 		t.Errorf("%v", out)
 	}
-	if strings.Contains(raw(out), dbPass) || strings.Contains(raw(out), "alice") {
-		t.Errorf("the answer carries the account: %v", out)
+	if strings.Contains(raw(out), dbPass) {
+		t.Errorf("the answer carries the password: %v", out)
 	}
 }
 
@@ -530,5 +535,68 @@ func TestATargetWithoutADatabaseListNeedsNoDatabaseInTheCall(t *testing.T) {
 	}
 	if o := e.fake.opens(); len(o) != 2 || o[1].db != "anything" {
 		t.Errorf("%+v", o)
+	}
+}
+
+// The account name is not a secret, and removing it damaged ordinary answers: the name of a company, a team or a product
+// is often in the name of a user and of every database, so "SHOW DATABASES" came back as "[REDACTED]_gm_base". Only the
+// password is scrubbed. (Found on a real RDS target, where 48 of 65 database names lost a part.)
+func TestTheAccountNameIsNotScrubbedFromWhatTheDatabaseSays(t *testing.T) {
+	e := withDB(t, "dev-pg")
+	e.fake.rows = [][]any{{"alice_gm_base"}, {"test_alice_gm_base"}, {"alice"}, {"malice"}}
+	out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SHOW DATABASES"})
+	if isErr {
+		t.Fatalf("%v", out)
+	}
+	rows, _ := out["rows"].([]any)
+	got := []string{}
+	for _, r := range rows {
+		got = append(got, r.([]any)[0].(string))
+	}
+	want := []string{"alice_gm_base", "test_alice_gm_base", "alice", "malice"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("a name that contains the account's must come back whole: got %v", got)
+	}
+	if n, _ := out["redactions"].(float64); n != 0 {
+		t.Errorf("nothing secret was in the answer, so nothing was removed: %v", out["redactions"])
+	}
+}
+
+func TestTheAccountNameIsNotScrubbedFromColumnNames(t *testing.T) {
+	e := withDB(t, "dev-pg")
+	e.fake.cols = []string{"alice_id", "Grants for alice@%"}
+	out, _ := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"})
+	cols, _ := out["columns"].([]any)
+	if len(cols) != 2 || cols[0] != "alice_id" || cols[1] != "Grants for alice@%" {
+		t.Errorf("column names are not scrubbed of the account name: %v", cols)
+	}
+}
+
+// The password still is, in every cell, in a column name, and in an error, whatever else changes.
+func TestThePasswordIsStillScrubbedFromCellsColumnsAndErrors(t *testing.T) {
+	e := withDB(t, "dev-pg")
+	e.fake.cols = []string{"c_" + dbPass}
+	e.fake.rows = [][]any{{"x " + dbPass + " y"}, {"alice owns " + dbPass}}
+	out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"})
+	if isErr {
+		t.Fatalf("%v", out)
+	}
+	if strings.Contains(raw(out), dbPass) {
+		t.Errorf("the password is in the answer: %s", raw(out))
+	}
+	if n, _ := out["redactions"].(float64); n != 3 {
+		t.Errorf("one in the column name and two in the cells: %v", out["redactions"])
+	}
+	if !strings.Contains(raw(out), "alice owns") {
+		t.Errorf("the rest of the cell is kept: %s", raw(out))
+	}
+}
+
+// An account whose name is its password's neighbour, or a password shorter than the scrubber's minimum, must not turn the
+// scrubber into something that eats the answer.
+func TestAShortPasswordIsLeftAloneRatherThanDamagingTheAnswer(t *testing.T) {
+	sc := scrubber(&site.Session{Tokens: map[string]string{dbsite.TokenUser: "alice", dbsite.TokenPassword: "ab"}})
+	if got, n := sc.Text("a table about abacus and ab"); n != 0 || got != "a table about abacus and ab" {
+		t.Errorf("a password under the minimum length is not scrubbed (it would damage ordinary text): %q %d", got, n)
 	}
 }
