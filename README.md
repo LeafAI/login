@@ -134,12 +134,29 @@ exists only while a person is being asked.
 securl config init                 # DingTalk robot + safety settings, with a test message
 securl config site add https://gitlab.corp.example   # detects the driver, asks that driver's own questions
 securl config site custom          # any other website: answer questions, no YAML
+securl config db add               # a PostgreSQL / MySQL database (dev, test, staging): answer questions, no YAML
+securl config db list              # what is configured; `db remove <name>` forgets one
 securl config set                  # list every setting; `set <key> <value>`, `get`, `unset`, `show`
 ```
 
 Each change is checked before it is saved (a typo such as `dingtalk.webhok` is refused with a suggestion), the
 file stays private (0600), your comments are kept and the previous version is saved as `config.yaml.bak`.
 Secrets are asked without echo and shown masked.
+
+`securl config db add` asks for the name, the engine, the host, the port (the engine's own is offered), the environment
+(dev, test or staging: production is not offered), which databases an agent may use, whether it may change data, and how
+the connection is protected. Every answer is checked as it is given, with the check the server applies when it loads the
+configuration. For scripts, give the answers as flags and nothing is asked:
+
+```
+securl config db add --name gm-dev-pg --driver postgres --host pg.dev.corp.example --environment dev --databases appdb
+securl config db add --name gm-dev-my --driver mysql --host my.dev.corp.example --environment test --databases appdb \
+  --mode read_write --yes-allow-writes [--allow-ddl] [--max-changed-rows 100]
+```
+
+A `read_write` target is the one answer that is a decision about risk: the guided setup asks you to confirm it, and a
+script has to say `--yes-allow-writes`. No command asks for, or accepts, a database username or password: a person types
+the account on the login page when an agent opens a session, and it is kept in the vault.
 
 ## First run
 
@@ -186,7 +203,8 @@ security:
   allowed_hosts: ["*.corp.example"]   # optional: the agent may only log in to matching hosts
   allow_local_addresses: false        # true lets the agent reach localhost / link-local / metadata addresses (dev only)
   allow_archery_requests: false       # true lets the request tool talk to Archery, which skips the approval gate of archery_run_sql
-databases:                   # PostgreSQL / MySQL for dev, test or staging; production is refused (use Archery)
+databases:                   # PostgreSQL / MySQL for dev, test or staging; `securl config db add` writes this
+                             # production is refused (use Archery)
   - name: gm-dev-pg          # what an agent calls it; the agent never supplies a host or a port
     driver: postgres         # postgres | mysql
     host: pg.dev.corp.example

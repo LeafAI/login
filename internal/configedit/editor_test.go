@@ -300,3 +300,93 @@ func TestAllowLocalAddressesIsASettableBoolean(t *testing.T) {
 		t.Error("a non-boolean must be rejected")
 	}
 }
+
+func TestDatabases(t *testing.T) {
+	p := write(t, "# my config\ndingtalk:\n  webhook: https://oapi.dingtalk.com/robot/send?access_token=abc # robot\n")
+	e, _ := Open(p)
+	d := config.Database{Name: "gm-dev-pg", Driver: "postgres", Host: "pg.dev.corp.example", Environment: "dev", Databases: []string{"appdb"}}
+	if err := e.SetDatabase(d); err != nil {
+		t.Fatal(err)
+	}
+	d.Host = "pg2.dev.corp.example"
+	if err := e.SetDatabase(d); err != nil { // same name: replaced, not duplicated
+		t.Fatal(err)
+	}
+	if err := e.SetDatabase(config.Database{Name: "gm-dev-my", Driver: "mysql", Host: "my.dev.corp.example", Environment: "test", Mode: "read_write", AllowDDL: true, MaxChangedRows: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Save(); err != nil {
+		t.Fatal(err)
+	}
+	c := reload(t, p)
+	if len(c.Databases) != 2 || c.Databases[0].Host != "pg2.dev.corp.example" || c.Databases[0].Port != 5432 || c.Databases[0].Mode != "read_only" {
+		t.Fatalf("databases = %+v", c.Databases)
+	}
+	if !c.Databases[1].AllowsDDL() || c.Databases[1].ChangedRowsLimit() != 20 {
+		t.Fatalf("second target = %+v", c.Databases[1])
+	}
+	raw, _ := os.ReadFile(p)
+	if !strings.Contains(string(raw), "# my config") || !strings.Contains(string(raw), "# robot") {
+		t.Errorf("comments must survive:\n%s", raw)
+	}
+	for _, key := range []string{"password", "passwd", "username"} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("the file must hold no account (%s):\n%s", key, raw)
+		}
+	}
+	got, err := e.Databases()
+	if err != nil || len(got) != 2 {
+		t.Fatalf("%v %v", got, err)
+	}
+	e2, _ := Open(p)
+	if !e2.RemoveDatabase("gm-dev-pg") || e2.RemoveDatabase("gm-dev-pg") {
+		t.Fatal("RemoveDatabase should succeed once")
+	}
+	if err := e2.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(p); strings.Contains(string(raw), "mode: read_only") {
+		t.Errorf("the default mode is not written:\n%s", raw)
+	}
+	if c := reload(t, p); len(c.Databases) != 1 || c.Databases[0].Name != "gm-dev-my" {
+		t.Fatalf("%+v", c.Databases)
+	}
+	e3, _ := Open(p)
+	e3.RemoveDatabase("gm-dev-my")
+	if err := e3.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(p); strings.Contains(string(raw), "databases") {
+		t.Errorf("an empty list must not be left behind:\n%s", raw)
+	}
+}
+
+func TestADatabaseThatWouldBeRefusedAtStartupIsRefusedAtSave(t *testing.T) {
+	for name, d := range map[string]config.Database{
+		"production": {Name: "a", Driver: "postgres", Host: "db.corp.example", Environment: "prod"},
+		"no env":     {Name: "a", Driver: "postgres", Host: "db.corp.example"},
+		"host:port":  {Name: "a", Driver: "postgres", Host: "db.corp.example:5432", Environment: "dev"},
+		"ddl on ro":  {Name: "a", Driver: "postgres", Host: "db.corp.example", Environment: "dev", AllowDDL: true},
+		"driver":     {Name: "a", Driver: "oracle", Host: "db.corp.example", Environment: "dev"},
+	} {
+		p := write(t, "")
+		e, _ := Open(p)
+		if err := e.SetDatabase(d); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := e.Save(); err == nil {
+			t.Errorf("%s: must be refused when saved", name)
+		}
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s: nothing may be written", name)
+		}
+	}
+}
+
+func TestDatabasesAreNotSettableAsPlainValues(t *testing.T) {
+	for _, s := range Settings() {
+		if strings.HasPrefix(s.Path, "databases") {
+			t.Errorf("%s: a list of entries is set with `securl config db`", s.Path)
+		}
+	}
+}

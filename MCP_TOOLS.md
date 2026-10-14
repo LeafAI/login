@@ -348,7 +348,7 @@ Refuses if already executing/executed (`invalid_argument`).
 
 ## 11a. Databases: `db_targets`, `db_query`, `db_exec`
 
-For PostgreSQL and MySQL databases that are **not production**. The owner lists them in `databases:` in the configuration (see README); an agent can only name one of them and never supplies a host, a port or a connection string. Production
+For PostgreSQL and MySQL databases that are **not production**. The owner lists them with `securl config db add` (or `databases:` in the configuration; see README); an agent can only name one of them and never supplies a host, a port or a connection string. Production
 databases are refused when the configuration is loaded (`environment` must be `dev`, `test` or `staging`): they stay on
 Archery, where a person approves each change.
 

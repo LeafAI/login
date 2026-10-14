@@ -168,7 +168,8 @@ nothing more to do.
 
 ### Database targets
 
-Nothing in the file holds a database account.
+`securl config db add` sets one up (guided, or with flags for scripts); `db list` and `db remove <name>` manage them.
+Nothing in the file or on the command line holds a database account.
 
 A target in `databases:` is checked when the configuration loads (`securl doctor` shows the error): the name, the driver,
 the host (a name or an address, no port or scheme), the environment (`dev`, `test` or `staging`), the mode, and the
