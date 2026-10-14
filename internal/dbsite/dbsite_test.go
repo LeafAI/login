@@ -3,6 +3,7 @@ package dbsite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -206,5 +207,40 @@ func TestTheDriverOpensTheTargetTheKeyNames(t *testing.T) {
 	}
 	if gotTarget.Name != "other" || gotDB != "appdb" {
 		t.Errorf("%+v %q", gotTarget, gotDB)
+	}
+}
+
+// "The database could not be opened" told nobody what to fix. What went wrong is now said in the owner's terms, using only
+// the package's own errors, so it can never carry what a driver echoed (a connection string, a user, a password).
+func TestLoginSaysWhatWentWrongWithoutEchoingTheDriver(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err        error
+		wantIn     string
+		wantNotIn  []string
+		wantTarget error
+	}{
+		"database not allowed": {dbexec.ErrDatabaseNotAllowed, "databases", nil, site.ErrLoginRejected},
+		"timeout":              {dbexec.ErrTimeout, "timed out", nil, site.ErrUnreachable},
+		"unreachable detail": {fmt.Errorf("%w: tls: failed to verify certificate: x509: certificate is not trusted", dbexec.ErrUnreachable),
+			"certificate", nil, site.ErrUnreachable},
+	} {
+		f := &fakeOpener{err: tc.err}
+		_, err := newDriver(f).Login(context.Background(), BaseURL("gm-dev-pg"), asker("alice", "s3cret-pass"), nil)
+		if !errors.Is(err, tc.wantTarget) {
+			t.Errorf("%s: want %v, got %v", name, tc.wantTarget, err)
+			continue
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), tc.wantIn) {
+			t.Errorf("%s: the message should say %q: %v", name, tc.wantIn, err)
+		}
+		if strings.Contains(err.Error(), "s3cret-pass") || strings.Contains(err.Error(), "alice") {
+			t.Errorf("%s: the message carries the account: %v", name, err)
+		}
+	}
+	// An error this package does not know is still kept out of the message.
+	f := &fakeOpener{err: errors.New("dial tcp alice:s3cret-pass@10.0.0.1:3306: refused")}
+	_, err := newDriver(f).Login(context.Background(), BaseURL("gm-dev-pg"), asker("alice", "s3cret-pass"), nil)
+	if err == nil || strings.Contains(err.Error(), "s3cret-pass") || strings.Contains(err.Error(), "10.0.0.1") {
+		t.Errorf("%v", err)
 	}
 }

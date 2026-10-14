@@ -90,7 +90,8 @@ func clipName(s string) string {
 }
 
 // pickDatabase decides which database a call uses: the one it names (which the target must list), or the only one the
-// target lists. The agent never reaches a database the owner did not name.
+// target lists, or, when the owner listed none, none at all (the account decides what it can open). The agent never
+// reaches a database that a list of the owner's excludes.
 func pickDatabase(t config.Database, asked string) (string, *ToolError) {
 	switch {
 	case asked != "":
@@ -103,7 +104,7 @@ func pickDatabase(t config.Database, asked string) (string, *ToolError) {
 	case len(t.Databases) == 1:
 		return t.Databases[0], nil
 	case len(t.Databases) == 0:
-		return "", errf("invalid_argument", false, "database is required: %s does not list one", t.Name)
+		return "", nil // the owner named none: the account's default database (PostgreSQL: postgres) is where it starts
 	}
 	return "", errf("invalid_argument", false, "database is required: %s has several (%s)", t.Name, strings.Join(t.Databases, ", "))
 }

@@ -387,13 +387,43 @@ func TestNoDatabaseNameMeansNoConnectionWhenTheTargetNamesSome(t *testing.T) {
 		t.Errorf("an empty name: %v", err)
 	}
 	open := config.Database{}
-	if err := checkDatabase(open, ""); !errors.Is(err, ErrDatabaseNotAllowed) {
-		t.Errorf("an empty name must be refused even when the target lists no names: %v", err)
+	if err := checkDatabase(open, ""); err != nil {
+		t.Errorf("a target that lists no names takes the account's default database: %v", err)
 	}
 	if err := checkDatabase(open, "anything_plain"); err != nil {
 		t.Errorf("a target that lists no names accepts a plain one: %v", err)
 	}
 	if err := checkDatabase(d, "appdb"); err != nil {
 		t.Errorf("a listed name: %v", err)
+	}
+}
+
+// A target that lists no databases lets the account open any it can: the login must work without naming one, since
+// nothing names one. (It was refused as an empty name, so such a target could never be logged in to.)
+func TestATargetThatListsNoDatabasesCanBeOpenedWithoutOne(t *testing.T) {
+	eachDriver(t, func(d *config.Database) { d.Databases = nil }, func(t *testing.T, r rig) {
+		cn, err := OpenDatabase(context.Background(), r.target, r.ro, "", Options{AllowLocal: true})
+		if err != nil {
+			t.Fatalf("a target without a database list: %v", err)
+		}
+		defer cn.Close()
+		if _, err := cn.Query(context.Background(), "SELECT 1", 10); err != nil {
+			t.Errorf("the connection must work: %v", err)
+		}
+	})
+}
+
+// A name still has to be plain, whether or not the target lists names.
+func TestAnEmptyNameIsOnlyAcceptedWhenTheTargetListsNone(t *testing.T) {
+	if err := checkDatabase(config.Database{}, ""); err != nil {
+		t.Errorf("no list and no name: %v", err)
+	}
+	if err := checkDatabase(config.Database{Databases: []string{"appdb"}}, ""); !errors.Is(err, ErrDatabaseNotAllowed) {
+		t.Errorf("a list and no name must be refused: %v", err)
+	}
+	for _, bad := range []string{"a;b", "a b", "a'b", "a\"b", "a`b", "a\\b", "a\nb"} {
+		if err := checkDatabase(config.Database{}, bad); !errors.Is(err, ErrDatabaseNotAllowed) {
+			t.Errorf("%q: %v", bad, err)
+		}
 	}
 }

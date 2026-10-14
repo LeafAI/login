@@ -28,6 +28,11 @@ func openPostgres(ctx context.Context, t config.Database, c Credentials, databas
 		return nil, fmt.Errorf("postgres: %w", err)
 	}
 	cfg.Host, cfg.Port = t.Host, uint16(t.Port)
+	// PostgreSQL has no "no database": a connection that names none is made to a database called like the user, which
+	// is rarely there. The maintenance database is, and it is where an account that was given no list starts from.
+	if database == "" {
+		database = "postgres"
+	}
 	cfg.User, cfg.Password, cfg.Database = c.Username, c.Password, database
 	cfg.TLSConfig, cfg.Fallbacks = pgTLS(t), nil
 	cfg.ConnectTimeout = connectTimeout
