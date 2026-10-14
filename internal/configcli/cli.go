@@ -41,6 +41,9 @@ const usage = `usage: securl config <command> [-config file]
   site custom                describe any other website's login form step by step (no YAML needed)
   site list                  show configured websites and the drivers that are available
   site remove <host|name>    forget a website's settings, or a custom site
+  db add [flags]             guided setup of one PostgreSQL or MySQL database (non-production), or give the answers as flags
+  db list                    show configured databases
+  db remove <name>           forget a database target
   show                       print the configuration (secrets are masked)
   get <key>                  print one setting         (-reveal shows secrets)
   set [key [value]]          change one setting; without arguments lists every setting
@@ -76,6 +79,8 @@ func Run(args []string, env Env) int {
 		err = cmdSite(env, rest)
 	case "totp":
 		err = cmdTOTP(env, rest)
+	case "db":
+		err = cmdDB(env, rest)
 	default:
 		fmt.Fprintf(env.Err, "securl config: unknown command %q\n\n%s\n", cmd, usage)
 		return 2

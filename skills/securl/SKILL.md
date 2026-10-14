@@ -107,6 +107,7 @@ Do these in a terminal, in this order. They ask the user questions, so the user 
 securl vault init                      # passphrase, at least 16 characters, typed twice
 securl config init                     # DingTalk robot and safety settings; can send a test message
 securl config site add https://gitlab.corp.example   # one per site: detects the driver, asks its questions
+securl config db add                   # one per PostgreSQL / MySQL database (dev, test or staging), if agents will run SQL
 securl doctor                          # everything should be [ok]; the vault shows as locked, which is normal
 ```
 
@@ -122,6 +123,10 @@ securl doctor                          # everything should be [ok]; the vault sh
   A site served under a path needs a root: `securl config set roots.elk.corp.example https://elk.corp.example/kibana`.
 - To limit what an agent may reach: `securl config set security.allowed_hosts "*.corp.example"`.
 - A site that is not built in: `securl config site custom` asks for the login form step by step.
+- A database: `securl config db add` asks for the name, engine, host, environment (dev, test or staging), which databases
+  and whether the agent may change data. It never asks for a database account: a person types that when a session is
+  opened. `securl config db list` shows what exists; `securl config db remove <name>` forgets one. Do not hand-write the
+  `databases:` section for the user, and never put a username or a password in it.
 - `securl config show` prints the configuration with secrets masked. `securl config set` with no arguments lists every
   setting. Each change is checked before it is saved and the previous file is kept as `config.yaml.bak`.
 

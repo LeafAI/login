@@ -213,6 +213,89 @@ func (e *Editor) RemoveSite(name string) bool {
 	return false
 }
 
+// databaseEntry is how a database target is written to the file: only what the owner chose, so that the defaults stay
+// the program's to change, and in an order a person reads top to bottom.
+type databaseEntry struct {
+	Name             string   `yaml:"name"`
+	Driver           string   `yaml:"driver"`
+	Host             string   `yaml:"host"`
+	Port             int      `yaml:"port,omitempty"`
+	Environment      string   `yaml:"environment"`
+	Databases        []string `yaml:"databases,omitempty,flow"`
+	Mode             string   `yaml:"mode,omitempty"`
+	AllowDDL         bool     `yaml:"allow_ddl,omitempty"`
+	TLS              string   `yaml:"tls,omitempty"`
+	MaxRows          int      `yaml:"max_rows,omitempty"`
+	MaxChangedRows   int      `yaml:"max_changed_rows,omitempty"`
+	StatementTimeout string   `yaml:"statement_timeout,omitempty"`
+}
+
+func entryOf(d config.Database) databaseEntry {
+	e := databaseEntry{Name: d.Name, Driver: d.Driver, Host: d.Host, Port: d.Port, Environment: d.Environment, Databases: d.Databases,
+		Mode: d.Mode, AllowDDL: d.AllowDDL, TLS: d.TLS, MaxRows: d.MaxRows, MaxChangedRows: d.MaxChangedRows}
+	if e.Mode == config.ModeReadOnly {
+		e.Mode = "" // the default, which the program may change: the file keeps what the owner chose beyond it
+	}
+	if d.StatementTimeout > 0 {
+		e.StatementTimeout = d.StatementTimeout.String()
+	}
+	return e
+}
+
+// Databases returns the database targets defined in the file, as written (defaults are not filled in).
+func (e *Editor) Databases() ([]config.Database, error) {
+	n := mapGet(e.root, "databases")
+	if n == nil {
+		return nil, nil
+	}
+	var out []config.Database
+	if err := n.Decode(&out); err != nil {
+		return nil, fmt.Errorf("databases: %w", err)
+	}
+	return out, nil
+}
+
+// SetDatabase adds or replaces (by name) a database target. It never writes an account: the person types that on the
+// login page, and it lives in the vault.
+func (e *Editor) SetDatabase(d config.Database) error {
+	var node yaml.Node
+	if err := node.Encode(entryOf(d)); err != nil {
+		return fmt.Errorf("encode database %s: %w", d.Name, err)
+	}
+	seq := mapGet(e.root, "databases")
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		mapSet(e.root, "databases", seq)
+	}
+	for i, c := range seq.Content {
+		if m := mapGet(c, "name"); m != nil && m.Value == d.Name {
+			node.HeadComment = c.HeadComment
+			seq.Content[i] = &node
+			return nil
+		}
+	}
+	seq.Content = append(seq.Content, &node)
+	return nil
+}
+
+// RemoveDatabase deletes a database target by name.
+func (e *Editor) RemoveDatabase(name string) bool {
+	seq := mapGet(e.root, "databases")
+	if seq == nil {
+		return false
+	}
+	for i, c := range seq.Content {
+		if m := mapGet(c, "name"); m != nil && m.Value == name {
+			seq.Content = append(seq.Content[:i], seq.Content[i+1:]...)
+			if len(seq.Content) == 0 {
+				mapDelete(e.root, "databases")
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // Bytes renders the document.
 func (e *Editor) Bytes() ([]byte, error) {
 	var buf bytes.Buffer
@@ -246,7 +329,7 @@ func (e *Editor) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return cfg.Validate()
 }
 
 // Save validates and writes the file atomically (0600), keeping the previous version as <file>.bak.

@@ -65,11 +65,12 @@ func TestEverySecurlCommandInTheSkillExists(t *testing.T) {
 		"config": true, "vault": true, "doctor": true, "page": true, "version": true,
 	}
 	sub := map[string]map[string]bool{
-		"config": {"init": true, "site": true, "show": true, "get": true, "set": true, "unset": true, "totp": true, "path": true},
+		"config": {"init": true, "site": true, "show": true, "get": true, "set": true, "unset": true, "totp": true, "path": true, "db": true},
 		"vault":  {"init": true, "status": true, "passwd": true, "migrate": true},
 	}
 	siteSub := map[string]bool{"add": true, "custom": true, "list": true, "remove": true}
 	totpSub := map[string]bool{"init": true, "code": true, "status": true, "on": true, "off": true}
+	dbSub := map[string]bool{"add": true, "list": true, "remove": true}
 	cmd := regexp.MustCompile("(?m)(?:^|[`$] *|\\| )securl ((?:[a-z]+)(?: [a-z]+)?(?: [a-z]+)?)")
 	for _, m := range cmd.FindAllStringSubmatch(readSkill(t), -1) {
 		w := strings.Fields(m[1])
@@ -84,6 +85,9 @@ func TestEverySecurlCommandInTheSkillExists(t *testing.T) {
 		}
 		if w[0] == "config" && len(w) > 2 && w[1] == "totp" && !totpSub[w[2]] {
 			t.Errorf("`securl %s`: no such totp command", m[1])
+		}
+		if w[0] == "config" && len(w) > 2 && w[1] == "db" && !dbSub[w[2]] {
+			t.Errorf("`securl %s`: no such db command", m[1])
 		}
 	}
 }
