@@ -511,3 +511,24 @@ func TestTargetNamesAreExact(t *testing.T) {
 		t.Error("nothing is opened for a lookalike")
 	}
 }
+
+// A target the owner gave no list of databases has nothing to choose from: the call needs no database, and the account
+// decides what it can open. (It was refused as "database is required", so such a target could be logged in to but never
+// used.)
+func TestATargetWithoutADatabaseListNeedsNoDatabaseInTheCall(t *testing.T) {
+	e := withDB(t, "dev-my-ddl")
+	out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-my-ddl", "sql": "SELECT 1"})
+	if isErr {
+		t.Fatalf("%v", out)
+	}
+	if o := e.fake.opens(); len(o) != 1 || o[0].db != "" {
+		t.Errorf("no database was named, so none is asked for: %+v", o)
+	}
+	out, isErr = e.call(t, toolDBQuery, map[string]any{"target": "dev-my-ddl", "database": "anything", "sql": "SELECT 1"})
+	if isErr {
+		t.Fatalf("a target that lists none accepts a name the account can open: %v", out)
+	}
+	if o := e.fake.opens(); len(o) != 2 || o[1].db != "anything" {
+		t.Errorf("%+v", o)
+	}
+}

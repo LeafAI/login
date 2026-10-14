@@ -107,6 +107,20 @@ func (d *Driver) target(base *url.URL) (config.Database, error) {
 	return t, nil
 }
 
+// unreachableHint adds the reason a connection failed when it is one the owner can act on. Only two kinds of reason are
+// recognised, by what the package's own error says about them; anything else gets nothing, so what a driver echoed can
+// never reach the message.
+func unreachableHint(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "certificate") || strings.Contains(msg, "x509"):
+		return " (its TLS certificate is not trusted on this machine: install the CA, or the owner sets tls: skip-verify for this target)"
+	case strings.Contains(msg, "refused"):
+		return " (the connection was refused: check the host, the port and the network)"
+	}
+	return ""
+}
+
 // try opens and closes a connection, and says what went wrong in the vocabulary of the login flow. Whatever the driver
 // said is left out unless it is one of this package's own errors: a connection error can quote the connection string.
 func (d *Driver) try(ctx context.Context, target config.Database, user, pass string) error {
@@ -121,9 +135,13 @@ func (d *Driver) try(ctx context.Context, target config.Database, user, pass str
 	case errors.Is(err, dbexec.ErrBadCredentials):
 		return fmt.Errorf("%w: the database refused that username or password", site.ErrBadCredentials)
 	case errors.Is(err, dbexec.ErrUnreachable):
-		return fmt.Errorf("%w: %s", site.ErrUnreachable, target.Name)
+		return fmt.Errorf("%w: %s%s", site.ErrUnreachable, target.Name, unreachableHint(err))
+	case errors.Is(err, dbexec.ErrTimeout):
+		return fmt.Errorf("%w: connecting to %s timed out", site.ErrUnreachable, target.Name)
 	case errors.Is(err, dbexec.ErrLocalAddress):
 		return fmt.Errorf("%w: %v", site.ErrLoginRejected, dbexec.ErrLocalAddress)
+	case errors.Is(err, dbexec.ErrDatabaseNotAllowed):
+		return fmt.Errorf("%w: %s lists databases (%s) and the first one could not be used: check databases in the configuration", site.ErrLoginRejected, target.Name, strings.Join(target.Databases, ", "))
 	}
 	return fmt.Errorf("%w: the database could not be opened", site.ErrLoginRejected)
 }

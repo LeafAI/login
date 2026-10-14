@@ -83,7 +83,7 @@ func Open(ctx context.Context, t config.Database, c Credentials, o Options) (*Co
 }
 
 // OpenDatabase connects to one database. The name must be one the target lists; when the target lists none, any plain
-// name is accepted, since the account itself decides what it can open.
+// name (or none, for the account's default database) is accepted, since the account itself decides what it can open.
 func OpenDatabase(ctx context.Context, t config.Database, c Credentials, database string, o Options) (*Conn, error) {
 	if err := checkDatabase(t, database); err != nil {
 		return nil, err
@@ -92,11 +92,14 @@ func OpenDatabase(ctx context.Context, t config.Database, c Credentials, databas
 }
 
 func checkDatabase(t config.Database, name string) error {
-	if name == "" || strings.ContainsAny(name, ";'\"`\\ \t\r\n") {
+	if strings.ContainsAny(name, ";'\"`\\ \t\r\n") {
 		return ErrDatabaseNotAllowed
 	}
 	if len(t.Databases) == 0 {
-		return nil
+		return nil // the owner named none: the account decides what it can open, and an empty name is its default database
+	}
+	if name == "" {
+		return ErrDatabaseNotAllowed // the list names databases, and the account's default is not one of them
 	}
 	for _, d := range t.Databases {
 		if d == name {
