@@ -174,6 +174,25 @@ workflow, notifies the approvers and waits: pass `url`, `instance`, `database`, 
 reads a workflow and `archery_cancel` aborts one. Never submit SQL the user did not ask for: a person approves it, but
 the title and statement are shown to them from what you wrote.
 
+### Databases (PostgreSQL, MySQL; not production)
+
+`db_targets` lists what the owner made reachable: `name`, `driver`, `environment`, `mode` (`read_only` or `read_write`),
+`allow_ddl`, `databases` and `has_session`. You choose a `target` by name; you never give a host or a password.
+
+1. No session (`has_session: false`, or `no_session`): `session_open` with `url: "db://<target>"` and a `reason`. A person
+   types the database account on the usual page. Wait with `session_wait`, as for any login.
+2. `db_query` with `target`, `sql`, and `database` unless the target lists exactly one. One statement that only reads
+   (`SELECT`, `SHOW`, `EXPLAIN`, `DESCRIBE`, `WITH ... SELECT`). Ask for what you need (`limit`, `WHERE`, columns):
+   `truncated: true` means rows or bytes were left out.
+3. `db_exec` changes data, only on a `read_write` target, with a `reason` the team will read in DingTalk after the
+   change. Everything runs in one transaction; a change that touches more than `max_changed_rows` is rolled back
+   (`too_many_rows`), so narrow the `WHERE`. DDL needs `allow_ddl` on the target (`ddl_disabled`).
+4. `session_expired` means the database stopped accepting the saved account: `session_open` again with `force_refresh`.
+   `session_close` with the same `db://` URL forgets the account.
+
+Never use a database target for production: the owner cannot list one, and Archery (`archery_run_sql`) is where a person
+approves each change there. Do not look for another way to reach a host you were not given.
+
 ## 5. Work efficiently
 
 - **Check before asking.** `vault_status`, then `session_list`. A session is reused, so most calls need no person at all.
@@ -204,6 +223,9 @@ the title and statement are shown to them from what you wrote.
 | `tunnel_unavailable` | no tunnel carried traffic | the user runs `securl doctor -tunnel` |
 | `notify_failed` | DingTalk refused the message | the user runs `securl doctor -send` |
 | `site_unreachable` | the site could not be contacted | network, VPN or the `roots` path |
+| `unknown_target` / `database_not_allowed` | a database or target name that is not configured | `db_targets`; use a name it lists |
+| `target_read_only` / `not_read_only` | a change on a read-only target, or a `db_query` that is not one plain read | use `db_exec` on a `read_write` target |
+| `too_many_rows` / `statement_timeout` | the change was rolled back, or the statement ran too long | narrow the statement |
 | `invalid_argument` | a wrong or extra argument | read the message; a passphrase argument is always refused |
 
 `securl doctor` is the first thing to run for anything about setup. It never asks for the passphrase.

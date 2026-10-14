@@ -37,11 +37,15 @@ func (s *Server) onTunnel(f *flow.Flow, provider string, attempts int) {
 type targeter interface{ target() string }
 type sqler interface{ sqlText() string }
 
-func (i LoginInput) target() string   { return i.URL }
-func (i LogoutInput) target() string  { return i.URL }
-func (a ArcheryURL) target() string   { return a.URL }
-func (i QueryInput) sqlText() string  { return i.SQL }
-func (i RunSQLInput) sqlText() string { return i.SQL }
+func (i LoginInput) target() string    { return i.URL }
+func (i LogoutInput) target() string   { return i.URL }
+func (i DBQueryInput) target() string  { return "db://" + i.Target }
+func (i DBExecInput) target() string   { return "db://" + i.Target }
+func (a ArcheryURL) target() string    { return a.URL }
+func (i QueryInput) sqlText() string   { return i.SQL }
+func (i DBQueryInput) sqlText() string { return i.SQL }
+func (i DBExecInput) sqlText() string  { return i.SQL }
+func (i RunSQLInput) sqlText() string  { return i.SQL }
 
 // maxReasonBytes bounds agent-controlled text in the audit log, as the login tool does for the message to people.
 const maxReasonBytes = 200

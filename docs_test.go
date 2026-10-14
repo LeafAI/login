@@ -26,7 +26,7 @@ func realTools(t *testing.T) map[string]bool {
 	return have
 }
 
-var toolish = regexp.MustCompile("`((?:session|site|vault|archery)_[a-z_]+)`")
+var toolish = regexp.MustCompile("`((?:session|site|vault|archery|db)_[a-z_]+)`")
 
 func TestEveryToolTheDocumentsNameExists(t *testing.T) {
 	have := realTools(t)

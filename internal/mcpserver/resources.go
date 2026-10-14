@@ -25,8 +25,18 @@ type Policy struct {
 	LinkUnlockRequired bool `json:"link_unlock_required"`
 	// SealingCodeRequired: the person must type a short-period code in the page, and what they type is sealed with it.
 	SealingCodeRequired bool `json:"sealing_code_required"`
+	// DatabaseTargets lists the configured database targets by name, with what an agent may do on each. No hosts.
+	DatabaseTargets []PolicyDatabase `json:"database_targets"`
 	// VaultState: not_initialized | locked | unlocked. While it is not "unlocked" every tool that touches a site refuses.
 	VaultState string `json:"vault_state"`
+}
+
+// PolicyDatabase is one database target as the policy shows it.
+type PolicyDatabase struct {
+	Name        string `json:"name"`
+	Environment string `json:"environment"`
+	Mode        string `json:"mode"`
+	AllowDDL    bool   `json:"allow_ddl"`
 }
 
 // PolicyLimits mirrors the `limits:` config section.
@@ -41,8 +51,13 @@ func (s *Server) policy() Policy {
 	hosts := append([]string{}, s.cfg.Security.AllowedHosts...)
 	sort.Strings(hosts)
 	l := s.cfg.Limits
+	dbs := make([]PolicyDatabase, 0, len(s.cfg.Databases))
+	for _, d := range s.cfg.Databases {
+		dbs = append(dbs, PolicyDatabase{Name: d.Name, Environment: d.Environment, Mode: d.Mode, AllowDDL: d.AllowsDDL()})
+	}
 	return Policy{
-		AllowedHosts: hosts, LocalAddressesAllowed: s.cfg.Security.AllowLocalAddresses, MaxBlockSeconds: int(s.maxBlock(0).Seconds()),
+		DatabaseTargets: dbs,
+		AllowedHosts:    hosts, LocalAddressesAllowed: s.cfg.Security.AllowLocalAddresses, MaxBlockSeconds: int(s.maxBlock(0).Seconds()),
 		Limits: PolicyLimits{PerSite: l.PerSite, Total: l.Total,
 			WindowSeconds: int(l.Window.Seconds()), RejectCooldownSeconds: int(l.RejectCooldown.Seconds())},
 		DDLAllowed: s.cfg.Archery.DDLAllowed(), ArcheryRequestsAllowed: s.cfg.Security.AllowArcheryRequests, AuditEnabled: s.cfg.Audit.On(),

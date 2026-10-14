@@ -39,6 +39,8 @@ type Config struct {
 	Archery Archery           `yaml:"archery"`
 	// Sites defines extra websites with the declarative generic driver.
 	Sites []generic.Spec `yaml:"sites"`
+	// Databases lists the PostgreSQL and MySQL databases an agent may run SQL against (non-production only).
+	Databases []Database `yaml:"databases"`
 }
 
 // Vault configures the encrypted store that holds every secret login keeps (logged-in sessions, TOTP secrets). It is
@@ -158,6 +160,9 @@ func (s Security) Sources(secrets SecretReader) (link, seal *totp.Source, err er
 // Validate checks the settings that depend on one another.
 func (c *Config) Validate() error {
 	if err := c.Security.Validate(); err != nil {
+		return err
+	}
+	if err := validateDatabases(c.Databases); err != nil {
 		return err
 	}
 	if t := c.Security.LinkTOTP; t.Enabled {
@@ -332,6 +337,7 @@ func (c *Config) applyDefaults(dir string) {
 	if c.Web.TTL == 0 {
 		c.Web.TTL = 10 * time.Minute
 	}
+	c.Databases = applyDatabaseDefaults(c.Databases)
 	c.Security.LinkTOTP.applyDefaults(10*time.Minute, filepath.Join(dir, "totp", "link.secret"))
 	c.Security.SealTOTP.applyDefaults(30*time.Second, filepath.Join(dir, "totp", "seal.secret"))
 	if c.Audit.File == "" {

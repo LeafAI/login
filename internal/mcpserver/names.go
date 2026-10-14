@@ -12,6 +12,9 @@ const (
 	toolSessionClose = "session_close" // forget a session
 	toolRequest      = "request"       // send an HTTP request to a site with the session's credentials; they never reach the agent
 	toolSiteList     = "site_list"     // which sites securl can reach
+	toolDBTargets    = "db_targets"    // the databases the owner has made reachable
+	toolDBQuery      = "db_query"      // run one read-only statement on a database
+	toolDBExec       = "db_exec"       // change data on a database that takes changes
 	toolVaultStatus  = "vault_status"
 	toolVaultUnlock  = "vault_unlock"
 

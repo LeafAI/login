@@ -6,7 +6,7 @@ for `internal/mcpserver/types.go`.
 
 ## 0. Conventions
 
-**Tools (15)**
+**Tools (18)**
 
 | Tool | Purpose | Blocks? |
 |---|---|---|
@@ -25,6 +25,9 @@ for `internal/mcpserver/types.go`.
 | `archery_wait` | resume a pending workflow (idempotent) | up to `max_block_seconds` |
 | `archery_workflow_status` | read a workflow's state | no |
 | `archery_cancel` | abort a workflow | no |
+| `db_targets` | list the PostgreSQL / MySQL databases the owner made reachable (no hosts, no accounts) | no |
+| `db_query` | run one read-only statement on a database target | up to the target's `statement_timeout` |
+| `db_exec` | change data on a database target that is `read_write` | up to the target's `statement_timeout` |
 
 (`archery_submit_sql` is intentionally omitted: `archery_run_sql` with `wait: false` covers it.)
 
@@ -51,7 +54,7 @@ Codes: `invalid_argument`, `unsupported_site`, `human_timeout` (nobody completed
 `rate_limited` (too many requests to people, or the site was just rejected; `retryable`, carries a hint not to loop),
 `bad_credentials`, `login_rejected` (site refused, e.g. account locked / captcha), `tunnel_unavailable`,
 `notify_failed` (DingTalk), `site_unreachable`, `ddl_disabled`, `sql_check_failed`, `archery_error`,
-`workflow_not_found`, `session_expired` (a cached session was rejected by the site; call `session_open` with `force_refresh`), `internal`.
+`workflow_not_found`, `unknown_target`, `target_read_only`, `not_read_only`, `database_not_allowed`, `too_many_rows`, `statement_timeout`, `sql_error`, `session_expired` (a cached session was rejected by the site; call `session_open` with `force_refresh`), `internal`.
 
 **Output schemas and titles.** Every tool advertises a human-readable `title` and an `outputSchema` (generated
 from the Go result types, so they cannot drift). The schemas list the fields of both the success and the
@@ -64,7 +67,7 @@ pending answer; no field is `required`, because one result type serves both. A t
 |---|---|
 | `securl://sites` | same as `site_list` |
 | `securl://sessions` | same as `session_list` |
-| `securl://policy` | `allowed_hosts`, `local_addresses_allowed`, `max_block_seconds`, `limits` (per site / total / window / reject cool-down), `archery_ddl_allowed`, `archery_requests_allowed`, `audit_enabled`, `human_step_ttl_seconds`, `link_unlock_required`, `sealing_code_required` (which TOTP factors the person is asked for; never a secret or a code) |
+| `securl://policy` | `allowed_hosts`, `local_addresses_allowed`, `max_block_seconds`, `limits` (per site / total / window / reject cool-down), `archery_ddl_allowed`, `archery_requests_allowed`, `database_targets` (name, environment, mode, allow_ddl; never a host), `audit_enabled`, `human_step_ttl_seconds`, `link_unlock_required`, `sealing_code_required` (which TOTP factors the person is asked for; never a secret or a code) |
 
 **Server instructions.** At connect time the server tells the model how to use the tools: open the vault with `vault_unlock` when it is locked, call `session_open`, on
 `pending` call `session_wait` (never `session_open` again), what to do for each error code, treat cookies as secrets.
@@ -342,6 +345,51 @@ Output
 
 Input: `{ "workflow_id": integer, "url": uri, "reason": string? }`. Output: `{ "status": "aborted" }`.
 Refuses if already executing/executed (`invalid_argument`).
+
+## 11a. Databases: `db_targets`, `db_query`, `db_exec`
+
+For PostgreSQL and MySQL databases that are **not production**. The owner lists them in `databases:` in the configuration (see README); an agent can only name one of them and never supplies a host, a port or a connection string. Production
+databases are refused when the configuration is loaded (`environment` must be `dev`, `test` or `staging`): they stay on
+Archery, where a person approves each change.
+
+The account is typed once by a person: `session_open` with `url: "db://<target>"` sends the usual DingTalk link, the page
+asks for a username and a password, and securl checks them by connecting. The pair is kept in the vault like any other
+session; `session_close` with the same URL forgets it. The agent never sees it: it appears in no answer, no error, no
+audit line and no message, and an answer that echoes it (a query of `current_setting`, a table that holds it) has it
+removed (`redactions` counts them). A password the database stops accepting ends the session (`session_expired`).
+
+`db_targets` (no input) answers `{targets: [{name, driver, environment, mode, allow_ddl, databases, max_rows,
+max_changed_rows, has_session}]}`. It works while the vault is locked (`has_session` is then `false`).
+
+`db_query` takes `{target, database?, sql, limit?}`.
+`database` may be left out when the target lists exactly one; when it lists several, naming one is required, and a name the
+target does not list is `database_not_allowed`. It answers `{columns, rows, truncated?, redactions}`. Exactly one
+read-only statement is accepted (`SELECT`, `SHOW`, `EXPLAIN`, `DESCRIBE`, `WITH ... SELECT`, `VALUES`, `TABLE`), no
+`INTO`, no locking clause. That is checked first, and then the statement runs in a read-only transaction on a read-only
+session, so a statement the check missed (a data-modifying CTE) is still refused by the database. Rows stop at `limit`
+(default 1000, never more than the target's `max_rows`, at most 10000), a result stops at 1 MiB, and a value is cut at
+64 KiB; `truncated` says that something was left out.
+
+`db_exec` takes `{target, database?, sql, reason}` and works only on a target whose `mode` is `read_write`
+(`target_read_only` otherwise, before anything is opened). The statement or statements run in **one transaction**.
+If the rows they touch, added up over every statement, exceed the target's `max_changed_rows`, the transaction is **rolled
+back** and the answer is `too_many_rows`. DDL (`CREATE`, `ALTER`, `DROP`, `TRUNCATE`, `RENAME`, `PREPARE`, `EXECUTE`) is
+refused (`ddl_disabled`) unless the target has `allow_ddl: true`; the check is the same scanner as `archery.allow_ddl`. No
+approval is asked: the team is told **afterwards**, in DingTalk, with the target, the database, the reason, the number
+of rows and the statement (the answer's `notified` says whether the message went out; a change that was made is not
+undone by a failed message). `reason` is required and is escaped in the message.
+
+Both tools enforce `statement_timeout` (`statement_timeout` error, retryable), refuse this machine's own addresses unless
+`security.allow_local_addresses` is on, verify the server's TLS certificate unless the target says `tls: skip-verify` or
+`tls: disable`, and are audited as `db_query` / `db_exec` (target, environment, size and SHA-256 of the SQL, never its text).
+
+Errors: `vault_locked`, `unknown_target`, `no_session`, `session_expired`, `database_not_allowed`, `target_read_only`,
+`not_read_only`, `ddl_disabled`, `too_many_rows`, `statement_timeout`, `sql_error` (the database's own message about the
+statement), `site_unreachable`, `host_not_allowed`, `invalid_argument`.
+
+**What securl cannot do:** it cannot tell whether a host really is non-production, and an agent can read whatever the
+account can read. The boundary is the account a person types: give it only what an agent may do there, and no
+`dblink` / `postgres_fdw` / `FEDERATED` access to a production server.
 
 ## 12. Human-facing side effects (summary)
 
