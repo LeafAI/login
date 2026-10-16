@@ -20,6 +20,16 @@ var (
 	ErrUnreachable    = errors.New("site unreachable")
 )
 
+// Unreachable marks a failure to ask a site at all (the connection was refused, timed out or could not be made) as
+// ErrUnreachable, keeping what the transport said. A session probe that returns it tells the cache that nothing was learned
+// about the session, so the session is kept; a probe that returns anything else means the site was asked and refused.
+func Unreachable(err error) error {
+	if err == nil || errors.Is(err, ErrUnreachable) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrUnreachable, err)
+}
+
 // Field describes one input the human is asked for in a round.
 type Field struct {
 	Name   string `json:"name"`

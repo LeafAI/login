@@ -421,3 +421,212 @@ func TestUpdateWithNilIsRefused(t *testing.T) {
 		t.Error("the session is untouched")
 	}
 }
+
+// ---- a probe that cannot tell must not cost the person their login ----
+
+// flakyProbe is what the registered flakyDriver answers. A session read back from the vault is given the driver the registry
+// holds for its site name, not the one that was Put, so the answer has to live where every instance can reach it.
+var flakyProbe error
+
+type flakyDriver struct{ err *error }
+
+func (flakyDriver) Name() string        { return "flaky" }
+func (flakyDriver) Match(*url.URL) bool { return false }
+func (flakyDriver) NeedsLogin() bool    { return true }
+func (flakyDriver) Login(context.Context, *url.URL, site.Asker, *http.Client) (*site.Session, error) {
+	return nil, errors.New("unused")
+}
+func (d flakyDriver) Probe(context.Context, *url.URL, *site.Session, *http.Client) error {
+	if d.err != nil {
+		return *d.err
+	}
+	return flakyProbe
+}
+
+func init() { site.Register(flakyDriver{}) }
+
+// staleCache holds one session whose last validation is long ago, so that the next use probes it.
+func staleCache(t *testing.T, probeErr *error, store *Store) (*Cache, *url.URL) {
+	t.Helper()
+	u, _ := url.Parse("https://flaky.example")
+	c := New()
+	if store != nil {
+		c = NewPersistent(store)
+	}
+	c.Put(u, flakyDriver{probeErr}, sample("good"))
+	c.mu.Lock()
+	c.m[Key(u)].ValidatedAt = time.Now().Add(-time.Hour)
+	c.mu.Unlock()
+	return c, u
+}
+
+func TestAProbeThatCannotReachTheSiteKeepsTheSession(t *testing.T) {
+	for name, err := range map[string]error{
+		"unreachable":      fmt.Errorf("%w: connection refused", site.ErrUnreachable),
+		"wrapped deeper":   fmt.Errorf("probe: %w", fmt.Errorf("%w: timeout", site.ErrUnreachable)),
+		"bare unreachable": site.ErrUnreachable,
+	} {
+		probeErr := err
+		c, u := staleCache(t, &probeErr, nil)
+		e, gotErr := c.Lookup(context.Background(), u, http.DefaultClient, time.Minute)
+		if e != nil || !errors.Is(gotErr, site.ErrUnreachable) {
+			t.Errorf("%s: the caller must be told the site could not be reached: %v %v", name, e, gotErr)
+		}
+		if _, still := c.m[Key(u)]; !still {
+			t.Errorf("%s: the session must be kept in memory", name)
+		}
+	}
+}
+
+func TestAKeptSessionIsUsedAgainWhenTheSiteAnswers(t *testing.T) {
+	probeErr := fmt.Errorf("%w: connection refused", site.ErrUnreachable)
+	c, u := staleCache(t, &probeErr, nil)
+	if _, err := c.Lookup(context.Background(), u, http.DefaultClient, time.Minute); !errors.Is(err, site.ErrUnreachable) {
+		t.Fatalf("%v", err)
+	}
+	probeErr = nil // the VPN is back
+	e, err := c.Lookup(context.Background(), u, http.DefaultClient, time.Minute)
+	if err != nil || e == nil || e.Session.Tokens["t"] != "good" {
+		t.Errorf("the same session must come back with its own credentials: %+v %v", e, err)
+	}
+}
+
+func TestAKeptSessionSurvivesInTheVault(t *testing.T) {
+	dir := t.TempDir()
+	v := openVault(t, dir)
+	store := NewStore(v)
+	probeErr := fmt.Errorf("%w: connection refused", site.ErrUnreachable)
+	c, u := staleCache(t, &probeErr, store)
+	c.Lookup(context.Background(), u, http.DefaultClient, time.Minute)
+	if _, ok := store.load()[Key(u)]; !ok {
+		t.Fatal("the session must still be in the vault, or a restart would lose it")
+	}
+	probeErr, flakyProbe = nil, nil
+	c2 := NewPersistent(NewStore(v)) // a new process
+	if e, err := c2.Lookup(context.Background(), u, http.DefaultClient, time.Minute); err != nil || e == nil {
+		t.Errorf("a new process finds it: %v %v", e, err)
+	}
+}
+
+// What a driver that has not been taught the difference returns (a plain error) still ends the session, as before.
+func TestAProbeThatRejectsTheSessionStillDropsIt(t *testing.T) {
+	probeErr := errors.New("session invalid: 401 Unauthorized")
+	c, u := staleCache(t, &probeErr, nil)
+	e, err := c.Lookup(context.Background(), u, http.DefaultClient, time.Minute)
+	if e != nil || err == nil || errors.Is(err, site.ErrUnreachable) {
+		t.Errorf("a rejection is not 'cannot reach': %v %v", e, err)
+	}
+	if _, still := c.m[Key(u)]; still {
+		t.Error("a session the site rejected must be dropped")
+	}
+	if _, ok := c.GetWithin(context.Background(), u, http.DefaultClient, time.Minute); ok {
+		t.Error("and it stays gone")
+	}
+}
+
+func TestBadCredentialsAreARejectionEvenWhenTheMessageSaysUnreachable(t *testing.T) {
+	probeErr := fmt.Errorf("%w: the database refused that username or password (site unreachable)", site.ErrBadCredentials)
+	c, u := staleCache(t, &probeErr, nil)
+	c.Lookup(context.Background(), u, http.DefaultClient, time.Minute)
+	if _, still := c.m[Key(u)]; still {
+		t.Error("refused credentials end the session whatever else the text says")
+	}
+}
+
+func TestAnExpiredSessionIsDroppedWithoutAsking(t *testing.T) {
+	probes := 0
+	u, _ := url.Parse("https://expired2.example")
+	c := New()
+	s := sample("good")
+	s.ExpiresAt = time.Now().Add(-time.Second)
+	c.Put(u, countingDriver{&probes}, s)
+	e, err := c.Lookup(context.Background(), u, http.DefaultClient, 0)
+	if e != nil || !errors.Is(err, ErrExpired) || probes != 0 {
+		t.Errorf("%v %v probes=%d", e, err, probes)
+	}
+}
+
+func TestNoSessionIsSaidAsNoSession(t *testing.T) {
+	u, _ := url.Parse("https://never.example")
+	if _, err := New().Lookup(context.Background(), u, http.DefaultClient, 0); !errors.Is(err, ErrNoSession) {
+		t.Errorf("%v", err)
+	}
+}
+
+// Every time a session is dropped by the cache itself, somebody can be told why.
+func TestTheCacheSaysWhyItDroppedASession(t *testing.T) {
+	type drop struct{ key, reason string }
+	var got []drop
+	rec := func(key, reason string) { got = append(got, drop{key, reason}) }
+
+	probeErr := errors.New("session invalid")
+	c, u := staleCache(t, &probeErr, nil)
+	c.OnDrop = rec
+	c.Lookup(context.Background(), u, http.DefaultClient, time.Minute)
+
+	u2, _ := url.Parse("https://exp.example")
+	s := sample("good")
+	s.ExpiresAt = time.Now().Add(-time.Second)
+	c.Put(u2, probeDriver{}, s)
+	c.Lookup(context.Background(), u2, http.DefaultClient, 0)
+
+	unreachable := fmt.Errorf("%w: x", site.ErrUnreachable)
+	c3, u3 := staleCache(t, &unreachable, nil)
+	c3.OnDrop = rec
+	c3.Lookup(context.Background(), u3, http.DefaultClient, time.Minute)
+
+	want := []drop{{Key(u), DropRejected}, {Key(u2), DropExpired}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %v, want %v (and nothing for the session that was kept)", got, want)
+	}
+}
+
+func TestClosingASessionOnPurposeIsNotReportedAsADrop(t *testing.T) {
+	var n int
+	probeErr := error(nil)
+	c, u := staleCache(t, &probeErr, nil)
+	c.OnDrop = func(string, string) { n++ }
+	c.Delete(Key(u))
+	if n != 0 {
+		t.Errorf("an explicit Delete is the caller's decision and the caller records it: %d", n)
+	}
+}
+
+// Credentials that were refused end the session even when the same error also says the site could not be reached (the
+// database driver words some refusals that way), and the check is by identity, so a message that merely mentions it does not.
+func TestRefusedCredentialsEndTheSessionEvenIfTheErrorAlsoWrapsUnreachable(t *testing.T) {
+	both := fmt.Errorf("%w: and also %w", site.ErrBadCredentials, site.ErrUnreachable)
+	if cannotTell(both) {
+		t.Error("an error that wraps BadCredentials is a rejection, whatever else it wraps")
+	}
+	probeErr := both
+	c, u := staleCache(t, &probeErr, nil)
+	if e, err := c.Lookup(context.Background(), u, http.DefaultClient, time.Minute); e != nil || errors.Is(err, site.ErrUnreachable) && !errors.Is(err, ErrRejected) {
+		t.Errorf("%v %v", e, err)
+	}
+	if _, still := c.m[Key(u)]; still {
+		t.Error("the session must be dropped")
+	}
+	text := errors.New("this mentions site unreachable only in its words")
+	if cannotTell(text) {
+		t.Error("a message is not a classification")
+	}
+}
+
+// A session that is fresh is not probed at all, so a site that is down does not even matter for it.
+func TestAFreshSessionIsNotProbedEvenWhenTheSiteIsDown(t *testing.T) {
+	probeErr := fmt.Errorf("%w: down", site.ErrUnreachable)
+	u, _ := url.Parse("https://fresh-down.example")
+	c := New()
+	c.Put(u, flakyDriver{&probeErr}, sample("good")) // Put counts as validated just now
+	if e, err := c.Lookup(context.Background(), u, http.DefaultClient, time.Minute); err != nil || e == nil {
+		t.Errorf("a session validated a moment ago is used without asking the site: %v %v", e, err)
+	}
+	// and with no freshness window it is asked, and the answer is "cannot reach", kept
+	if e, err := c.Lookup(context.Background(), u, http.DefaultClient, 0); e != nil || !errors.Is(err, site.ErrUnreachable) {
+		t.Errorf("%v %v", e, err)
+	}
+	if _, still := c.m[Key(u)]; !still {
+		t.Error("kept")
+	}
+}

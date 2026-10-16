@@ -139,6 +139,13 @@ func setupWith(t *testing.T, tweak func(*config.Config)) *env { return setupWith
 // httptest's certificate hands in the client that trusts it (httptest.Server.Client). nil keeps the product's client.
 func setupWithClient(t *testing.T, hc *http.Client, tweak func(*config.Config)) *env {
 	t.Helper()
+	return setupFull(t, hc, mcpserver.Options{}, tweak)
+}
+
+// setupFull is setupWithClient with the server's options: the ones a test may set (SessionFreshness) are added to what every
+// test gets (the recorder as the DingTalk robot, local tunnels, the test vault).
+func setupFull(t *testing.T, hc *http.Client, opt mcpserver.Options, tweak func(*config.Config)) *env {
+	t.Helper()
 	browsertest.Require(t)
 	dir := t.TempDir()
 	if err := web.WriteTo(dir); err != nil {
@@ -154,7 +161,8 @@ func setupWithClient(t *testing.T, hc *http.Client, tweak func(*config.Config)) 
 		tweak(cfg)
 	}
 	rec := &recorder{}
-	srv, _, err := mcpserver.New(cfg, mcpserver.Options{Notifier: rec, Tunnels: localTunnels{}, HTTP: hc, Log: func(string, ...any) {}, Vault: testVault(t, cfg)})
+	opt.Notifier, opt.Tunnels, opt.HTTP, opt.Log, opt.Vault = rec, localTunnels{}, hc, func(string, ...any) {}, testVault(t, cfg)
+	srv, _, err := mcpserver.New(cfg, opt)
 	if err != nil {
 		t.Fatal(err)
 	}

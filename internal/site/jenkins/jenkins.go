@@ -155,7 +155,7 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 	req.Header.Set("Cookie", site.CookieHeader(s.Cookies))
 	resp, err := hc.Do(req)
 	if err != nil {
-		return err
+		return site.Unreachable(err)
 	}
 	body := site.ReadBody(resp)
 	var w who

@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/LeafAI/securl/internal/config"
+	"github.com/LeafAI/securl/internal/mcpserver"
 )
 
 // The full path with real databases: the tool asks for a session, a person types the account on the real page, and the
@@ -183,5 +185,55 @@ func TestTwoTargetsOfOneEngineEachKeepTheirOwnAccountEndToEnd(t *testing.T) {
 				t.Errorf("the other target must be untouched: %v", out)
 			}
 		})
+	}
+}
+
+// The case that cost a person their login: the database cannot be reached for a while (a VPN is off, a server restarts), and a
+// session older than the freshness window is probed in that moment. The account is good, so it must be kept; and when the
+// database is back the same account works, with nobody asked to type it again. Run on real servers: the database is stopped
+// and started for real.
+func TestAnAccountSurvivesTheDatabaseGoingAwayAndComingBack(t *testing.T) {
+	for _, tc := range []struct{ driver, container string }{
+		{config.DriverPostgres, "securl-test-pg"},
+		{config.DriverMySQL, "securl-test-my"},
+	} {
+		t.Run(tc.driver, func(t *testing.T) {
+			e := setupFull(t, nil, mcpserver.Options{SessionFreshness: -1}, func(c *config.Config) {
+				c.Databases = []config.Database{dbTarget(t, tc.driver, "dev", config.ModeReadOnly)}
+			})
+			loginDB(t, e, "dev", "ro", "ro-pass-1")
+			q := func() (map[string]any, bool) {
+				return e.call(t, "db_query", map[string]any{"target": "dev", "sql": "SELECT 1 AS one"})
+			}
+			if out, isErr := q(); isErr {
+				t.Fatalf("%v", out)
+			}
+			// SessionFreshness is negative: every use asks the database, as one does once enough time has passed.
+
+			docker(t, "pause", tc.container) // the network goes away: connections hang, nothing answers
+			out, isErr := q()
+			docker(t, "unpause", tc.container)
+			if !isErr || (out["code"] != "site_unreachable" && out["code"] != "statement_timeout") {
+				t.Fatalf("a database that cannot be reached is reported as such: %v", out)
+			}
+			if out["code"] == "no_session" || out["code"] == "session_expired" {
+				t.Fatalf("the account must not be reported lost: %v", out)
+			}
+
+			if out, isErr := q(); isErr {
+				t.Fatalf("with the database back the same account works, and nobody was asked again: %v", out)
+			}
+			if n := len(e.rec.all()); n != 1 {
+				t.Errorf("exactly one login message was ever sent (the first); got %d", n)
+			}
+		})
+	}
+}
+
+// docker runs one docker command for a test and fails it if the command fails.
+func docker(t *testing.T, args ...string) {
+	t.Helper()
+	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+		t.Skipf("docker %v: %v: %s (the servers are not containers of this machine)", args, err, out)
 	}
 }

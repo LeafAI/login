@@ -32,6 +32,17 @@ import (
 
 func sprintf(f string, a ...any) string { return fmt.Sprintf(f, a...) }
 
+// freshnessOf is the freshness window of an Options value: zero is the default, a negative value is "always ask".
+func freshnessOf(d time.Duration) time.Duration {
+	switch {
+	case d == 0:
+		return sessionFreshness
+	case d < 0:
+		return 0
+	}
+	return d
+}
+
 // Options overrides the default collaborators (used by tests).
 type Options struct {
 	Notifier flow.Notifier
@@ -40,6 +51,9 @@ type Options struct {
 	Log      func(format string, args ...any)
 	// Vault is the encrypted store of every secret (nil: one is opened at cfg.Vault.Dir). It starts locked.
 	Vault *vault.Vault
+	// SessionFreshness is how long a session that was just validated is used without asking the site (or the database)
+	// again. Zero means the default, 30 seconds; a negative value means every use asks.
+	SessionFreshness time.Duration
 }
 
 type Server struct {
@@ -52,6 +66,7 @@ type Server struct {
 	limiter *ratelimit.Limiter
 	vault   *vault.Vault
 	db      dbOpener
+	fresh   time.Duration
 
 	mu       sync.Mutex
 	core     *core     // nil while the vault is locked
@@ -81,7 +96,7 @@ func New(cfg *config.Config, opt Options) (*mcp.Server, *Server, error) {
 	if err := ApplySiteOptions(cfg); err != nil {
 		return nil, nil, err
 	}
-	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log, db: realDB{}}
+	s := &Server{cfg: cfg, hc: opt.HTTP, log: opt.Log, db: realDB{}, fresh: freshnessOf(opt.SessionFreshness)}
 	if s.hc == nil {
 		s.hc = netguard.New(netguard.Policy{AllowLocal: cfg.Security.AllowLocalAddresses, AllowedHosts: cfg.Security.AllowedHosts})
 	}

@@ -236,7 +236,7 @@ func (d *driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return err
+		return site.Unreachable(err)
 	}
 	resp.Body.Close()
 	want := d.spec.Probe.ExpectStatus

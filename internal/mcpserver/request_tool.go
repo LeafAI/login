@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeafAI/securl/internal/audit"
 	"github.com/LeafAI/securl/internal/proxy"
+	"github.com/LeafAI/securl/internal/session"
 	"github.com/LeafAI/securl/internal/site"
 )
 
@@ -85,6 +86,24 @@ func archeryRequestRefusal() *ToolError {
 	return e
 }
 
+// sessionLost turns what session.Cache.Lookup said into the error a tool answers with. The three cases are told apart on
+// purpose: no session (ask a person), a session the site refused (ask a person again), and a site that could not be reached
+// just now (the session is kept; try again).
+func sessionLost(err error, what, retryTool, noSession string) *ToolError {
+	switch {
+	case errors.Is(err, site.ErrUnreachable):
+		e := errf("site_unreachable", true, "%s cannot be reached right now: %v", what, err)
+		e.Hint = "The saved session is kept. Check the network or the VPN and try again; nobody needs to log in again."
+		return e
+	case errors.Is(err, session.ErrExpired), errors.Is(err, session.ErrRejected):
+		e := errf("session_expired", true, "the saved session for %s is no longer accepted", what)
+		e.Hint = retryTool
+		return e
+	}
+	e := errf("no_session", false, "%s", noSession)
+	return e
+}
+
 // sessionFor returns the session a request goes out with. A request only ever uses a session that exists: asking a
 // person to type a password is session_open's job. A site that has no login at all has nothing to look up, and gets an
 // empty session, so that no credential is added.
@@ -92,10 +111,12 @@ func (s *Server) sessionFor(ctx context.Context, k *core, base *url.URL) (string
 	if d, err := site.Resolve(s.alias(base), base); err == nil && !d.NeedsLogin() {
 		return d.Name(), &site.Session{}, nil
 	}
-	e, ok := k.cache.GetWithin(ctx, base, s.hc, sessionFreshness)
-	if !ok {
-		te := errf("no_session", false, "there is no valid session for %s", base.Host)
-		te.Hint = noSessionHint
+	e, err := k.cache.Lookup(ctx, base, s.hc, s.fresh)
+	if err != nil {
+		te := sessionLost(err, base.Host, requestExpiredHint, "there is no valid session for "+base.Host)
+		if te.Code == "no_session" {
+			te.Hint = noSessionHint
+		}
 		return "", nil, te
 	}
 	return e.Site, e.Session, nil
