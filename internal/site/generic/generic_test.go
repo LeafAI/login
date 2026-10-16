@@ -128,3 +128,43 @@ func TestAConfiguredSitesProbeSeparatesCouldNotAskFromWasToldNo(t *testing.T) {
 		t.Errorf("a site that answered 401: %v", err)
 	}
 }
+
+// A configured site may expect any status from its probe. A temporary status is "could not tell" unless the site is configured
+// to expect exactly that status (a health endpoint that answers 503 on purpose is the site's own definition of "valid").
+func TestAConfiguredSitesProbeReadsTemporaryStatusesAndHonoursTheExpectedOne(t *testing.T) {
+	mk := func(expect int) site.Driver {
+		d, err := New(Spec{Name: "g3", MatchHost: "g3",
+			Steps: []Step{{Method: "POST", Path: "/login", JSON: map[string]any{"u": "{{username}}"}}},
+			Probe: Probe{Path: "/me", ExpectStatus: expect}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	probe := func(d site.Driver, code int) error {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "x", code) }))
+		defer srv.Close()
+		base, _ := url.Parse(srv.URL)
+		return d.Probe(context.Background(), base, &site.Session{}, http.DefaultClient)
+	}
+	d := mk(0)
+	for _, code := range []int{502, 503, 504, 429} {
+		if err := probe(d, code); !errors.Is(err, site.ErrUnreachable) {
+			t.Errorf("HTTP %d: %v", code, err)
+		}
+	}
+	for _, code := range []int{401, 403, 500} {
+		if err := probe(d, code); err == nil || errors.Is(err, site.ErrUnreachable) {
+			t.Errorf("HTTP %d: %v", code, err)
+		}
+	}
+	if err := probe(mk(503), 503); err != nil {
+		t.Errorf("a site that is configured to expect 503 has a valid session when it answers 503: %v", err)
+	}
+	if err := probe(mk(302), 302); err != nil {
+		t.Errorf("expect_status is still honoured: %v", err)
+	}
+	if err := probe(mk(302), 200); err == nil {
+		t.Error("and any other status is not what it expects")
+	}
+}

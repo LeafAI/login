@@ -145,10 +145,7 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 		return site.Unreachable(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("archery session invalid: %s", resp.Status)
-	}
-	return nil
+	return site.ProbeStatus("archery", resp.StatusCode)
 }
 
 // Inspect reports the Archery generation (REST API or 1.x) and that the login page is reachable.

@@ -243,6 +243,9 @@ func (d *driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *
 	if want == 0 {
 		want = 200
 	}
+	if site.TemporaryStatus(resp.StatusCode) && resp.StatusCode != want {
+		return site.ProbeStatus(d.spec.Name, resp.StatusCode)
+	}
 	if resp.StatusCode != want {
 		return fmt.Errorf("%s session invalid: %s", d.spec.Name, resp.Status)
 	}

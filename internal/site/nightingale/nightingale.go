@@ -235,10 +235,7 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 		return site.Unreachable(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("nightingale token invalid: %s", resp.Status)
-	}
-	return nil
+	return site.ProbeStatus("nightingale", resp.StatusCode)
 }
 
 // Inspect reports whether login needs a captcha and an RSA-encrypted password.

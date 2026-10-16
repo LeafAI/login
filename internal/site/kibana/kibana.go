@@ -198,10 +198,7 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 		return site.Unreachable(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("kibana session invalid: %s", resp.Status)
-	}
-	return nil
+	return site.ProbeStatus("kibana", resp.StatusCode)
 }
 
 // Inspect reports the login providers Kibana publishes, its version when the login page shows it, and which body
