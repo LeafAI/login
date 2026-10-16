@@ -46,14 +46,19 @@ type CheckRow struct {
 	SQL      string `json:"sql,omitempty"`
 }
 
+// reviewRow is one row of what Archery's review engine says about a statement, before and after it runs. Archery's
+// serializer declares only a few fields and passes the rest of a row through as the engine made it, and the engines
+// disagree on the types: Inception sends numbers where go-inception sends strings ("affected_rows":"1", "execute_time":"0"),
+// an empty value is "" where a count is expected, and a missing one is null. A field that cannot be read is an error,
+// not a zero: an unreadable review must never be taken for a clean one.
 type reviewRow struct {
-	ID       int    `json:"id"`
-	ErrLevel int    `json:"errlevel"`
-	Message  string `json:"errormessage"`
-	SQL      string `json:"sql"`
-	Affected int    `json:"affected_rows"`
-	ExecTime string `json:"execute_time"`
-	Backup   string `json:"backup_dbname"`
+	ID       looseInt    `json:"id"`
+	ErrLevel looseInt    `json:"errlevel"`
+	Message  looseString `json:"errormessage"`
+	SQL      looseString `json:"sql"`
+	Affected looseInt    `json:"affected_rows"`
+	ExecTime looseString `json:"execute_time"`
+	Backup   looseString `json:"backup_dbname"`
 }
 
 // Check runs Archery's pre-submit review (POST /api/v1/workflow/sqlcheck/).
@@ -67,11 +72,11 @@ func (c *Client) Check(ctx context.Context, instanceID int, db, sql string) ([]C
 	}
 	out := make([]CheckRow, len(res.Rows))
 	for i, r := range res.Rows {
-		lv := map[int]string{0: "ok", 1: "warning", 2: "error"}[r.ErrLevel]
+		lv := map[int]string{0: "ok", 1: "warning", 2: "error"}[int(r.ErrLevel)]
 		if lv == "" {
 			lv = "error"
 		}
-		out[i] = CheckRow{Sequence: r.ID, Level: lv, Message: r.Message, SQL: r.SQL}
+		out[i] = CheckRow{Sequence: int(r.ID), Level: lv, Message: string(r.Message), SQL: string(r.SQL)}
 	}
 	return out, nil
 }
@@ -138,13 +143,13 @@ func toResultRows(rows []reviewRow) []ResultRow {
 	for i, r := range rows {
 		st := "success"
 		switch {
-		case r.ErrLevel >= 2:
+		case int(r.ErrLevel) >= 2:
 			st = "error"
-		case r.ErrLevel == 1:
+		case int(r.ErrLevel) == 1:
 			st = "warning"
 		}
-		secs, _ := strconv.ParseFloat(r.ExecTime, 64)
-		out[i] = ResultRow{Sequence: r.ID, SQL: r.SQL, State: st, AffectedRows: r.Affected, Error: r.Message, ExecuteMS: int64(secs * 1000), BackupID: r.Backup}
+		secs, _ := strconv.ParseFloat(string(r.ExecTime), 64)
+		out[i] = ResultRow{Sequence: int(r.ID), SQL: string(r.SQL), State: st, AffectedRows: int(r.Affected), Error: string(r.Message), ExecuteMS: int64(secs * 1000), BackupID: string(r.Backup)}
 	}
 	return out
 }

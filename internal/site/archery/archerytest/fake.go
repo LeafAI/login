@@ -174,7 +174,13 @@ func (f *Fake) Handler() http.Handler {
 			out(w, 400, map[string]any{"errors": "no such instance"})
 			return
 		}
-		out(w, 200, map[string]any{"error_count": lvl / 2, "rows": []map[string]any{{"id": 1, "errlevel": lvl, "errormessage": msg, "sql": "x"}}})
+		// The shape of a real answer, taken from a real Archery (go-inception): every field of the review row, text where a
+		// count is expected ("affected_rows":"1"), null for what the serializer leaves out. The fake used to send four
+		// fields only, and so never exercised the reading of the others.
+		out(w, 200, map[string]any{"is_execute": false, "checked": nil, "warning": nil, "error": nil, "warning_count": 0, "error_count": lvl / 2,
+			"is_critical": false, "syntax_type": 2, "column_list": []string{"id"},
+			"rows": []map[string]any{{"id": 1, "stage": "CHECKED", "errlevel": lvl, "stagestatus": "Audit completed", "errormessage": msg, "sql": "x",
+				"affected_rows": "1", "sequence": "0_0_00000000", "backup_dbname": "", "execute_time": "0", "sqlsha1": "", "backup_time": ""}}})
 	})
 	mux.HandleFunc("/api/v1/sql-workflows/", func(w http.ResponseWriter, r *http.Request) {
 		if f.Legacy {
