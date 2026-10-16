@@ -102,3 +102,29 @@ func TestSpecRoundTripKeepsBodyKinds(t *testing.T) {
 		t.Fatalf("the 2FA step must stay a form, got %+v", back.TwoFA.Step)
 	}
 }
+
+// A site defined in the configuration is checked the same way as the built-in ones: a session probe that cannot ask the
+// site says ErrUnreachable (so the session is kept), and one that is told no does not.
+func TestAConfiguredSitesProbeSeparatesCouldNotAskFromWasToldNo(t *testing.T) {
+	d, err := New(Spec{Name: "g2", MatchHost: "g2",
+		Steps: []Step{{Method: "POST", Path: "/login", JSON: map[string]any{"user": "{{username}}", "password": "{{password}}"}}},
+		Probe: Probe{Path: "/api/me"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &site.Session{Headers: map[string]string{"Authorization": "Bearer TOKEN-VALUE-1234567890"}}
+
+	down := httptest.NewServer(http.NotFoundHandler())
+	base, _ := url.Parse(down.URL)
+	down.Close()
+	if err := d.Probe(context.Background(), base, sess, http.DefaultClient); !errors.Is(err, site.ErrUnreachable) {
+		t.Errorf("a site that cannot be asked: %v", err)
+	}
+
+	no := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "no", 401) }))
+	defer no.Close()
+	base2, _ := url.Parse(no.URL)
+	if err := d.Probe(context.Background(), base2, sess, http.DefaultClient); err == nil || errors.Is(err, site.ErrUnreachable) {
+		t.Errorf("a site that answered 401: %v", err)
+	}
+}

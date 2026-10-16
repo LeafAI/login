@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -121,7 +122,7 @@ func withDB(t *testing.T, sessions ...string) *dbEnv {
 	for _, name := range sessions {
 		tg, _ := g.cfg.Database(name)
 		_ = tg
-		g.s.core.cache.Put(dbsite.BaseURL(name), dbsite.New(g.cfg.Database, nil), &site.Session{
+		g.s.core.cache.Put(dbsite.BaseURL(name), g.s.openDriver(), &site.Session{
 			Tokens: map[string]string{dbsite.TokenUser: "alice", dbsite.TokenPassword: dbPass}})
 	}
 	return &dbEnv{gateEnv: g, fake: fake, rec: rec}
@@ -605,7 +606,7 @@ func TestAShortPasswordIsLeftAloneRatherThanDamagingTheAnswer(t *testing.T) {
 // read-only one and a writing one on the same host) each keep their own account, and neither one's login, use or close
 // touches the other's.
 func putAccount(e *dbEnv, name, user, pass string) {
-	e.s.core.cache.Put(dbsite.BaseURL(name), dbsite.New(e.cfg.Database, nil), &site.Session{
+	e.s.core.cache.Put(dbsite.BaseURL(name), e.s.openDriver(), &site.Session{
 		Tokens: map[string]string{dbsite.TokenUser: user, dbsite.TokenPassword: pass}})
 }
 
@@ -723,5 +724,125 @@ func TestEachTargetsAccountSurvivesARestartSeparately(t *testing.T) {
 	}
 	if seen["dev-my"] == 0 || seen["dev-my-ddl"] == 0 {
 		t.Errorf("both targets must have been used after the restart: %v", seen)
+	}
+}
+
+// ---- a database that cannot be reached right now has not rejected the account ----
+
+// A session older than the freshness window is probed by connecting. If that connection fails because the network is down,
+// the account is still good: the answer says the database cannot be reached (retry), the account stays, and the next call
+// after the network is back uses it with nobody asked to type it again.
+func TestAnUnreachableDatabaseKeepsTheAccountAndSaysSo(t *testing.T) {
+	e := withDB(t, "dev-pg")
+	e.s.core.cache.MarkStale(dbsite.Key("dev-pg"))
+	e.fake.loginErr = fmt.Errorf("%w: connection refused", dbexec.ErrUnreachable)
+
+	out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"})
+	if !isErr || out["code"] != "site_unreachable" || out["retryable"] != true {
+		t.Fatalf("a database that cannot be reached is a retryable failure, not 'no session': %v", out)
+	}
+	if strings.Contains(raw(out), "no_session") {
+		t.Errorf("%v", out)
+	}
+	list, _ := e.call(t, toolDBTargets, map[string]any{})
+	for _, x := range list["targets"].([]any) {
+		if m := x.(map[string]any); m["name"] == "dev-pg" && m["has_session"] != true {
+			t.Errorf("the account must still be there while the database is down: %v", m)
+		}
+	}
+
+	e.fake.loginErr = nil // the network is back
+	e.s.core.cache.MarkStale(dbsite.Key("dev-pg"))
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"}); isErr {
+		t.Fatalf("with the database back the same account must work, with nobody asked: %v", out)
+	}
+	if o := e.fake.opens(); o[len(o)-1].user != "alice" || o[len(o)-1].pass != dbPass {
+		t.Errorf("%+v", o)
+	}
+}
+
+func TestAnAccountTheDatabaseRefusesIsStillDropped(t *testing.T) {
+	e := withDB(t, "dev-pg")
+	e.s.core.cache.MarkStale(dbsite.Key("dev-pg"))
+	e.fake.loginErr = dbexec.ErrBadCredentials
+	out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"})
+	if !isErr || out["code"] != "session_expired" {
+		t.Fatalf("a refused account is the case that ends the session: %v", out)
+	}
+	e.fake.loginErr = nil
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"}); !isErr || out["code"] != "no_session" {
+		t.Errorf("and it is gone: %v", out)
+	}
+}
+
+func TestEveryDropIsWrittenToTheAuditLogWithItsReason(t *testing.T) {
+	e := withDB(t, "dev-pg", "dev-my")
+	e.s.core.cache.MarkStale(dbsite.Key("dev-pg"))
+	e.fake.loginErr = dbexec.ErrBadCredentials
+	e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"})
+	e.s.core.cache.MarkStale(dbsite.Key("dev-my"))
+	e.fake.loginErr = fmt.Errorf("%w: down", dbexec.ErrUnreachable)
+	e.call(t, toolDBQuery, map[string]any{"target": "dev-my", "database": "appdb", "sql": "SELECT 1"})
+
+	log := readFile(t, e.cfg.Audit.File)
+	if !strings.Contains(log, `"event":"session_dropped"`) || !strings.Contains(log, `"host":"db://dev-pg"`) || !strings.Contains(log, `"result":"rejected"`) {
+		t.Errorf("the rejected account is recorded with its reason:\n%s", log)
+	}
+	if strings.Contains(log, `"host":"db://dev-my"`) && strings.Contains(log, "session_dropped") && strings.Count(log, "session_dropped") != 1 {
+		t.Errorf("a kept session is not a drop:\n%s", log)
+	}
+	if strings.Contains(log, dbPass) || strings.Contains(log, "alice") {
+		t.Errorf("the log holds the account:\n%s", log)
+	}
+}
+
+// The web tools get the same treatment: a site that cannot be reached when its session is checked keeps the session.
+func TestARequestToASiteThatCannotBeReachedKeepsTheSession(t *testing.T) {
+	rs := newRqSite(t)
+	g := withSession(t, rs, nil)
+	rs.Close() // the site goes away
+	g.s.core.cache.MarkStale(site.Key(mustURL(t, rs.URL)))
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/x"})
+	if !isErr || out["code"] != "site_unreachable" || out["retryable"] != true {
+		t.Fatalf("a site that cannot be reached is a retryable failure: %v", out)
+	}
+	if _, ok := g.s.core.cache.Peek(site.Key(mustURL(t, rs.URL))); !ok {
+		t.Error("and the session must still be there")
+	}
+}
+
+// Whoever reads "site_unreachable" has to be told the thing that matters: nobody needs to log in again.
+func TestTheUnreachableAnswerSaysTheSessionIsKept(t *testing.T) {
+	e := withDB(t, "dev-pg")
+	e.s.core.cache.MarkStale(dbsite.Key("dev-pg"))
+	e.fake.loginErr = fmt.Errorf("%w: down", dbexec.ErrUnreachable)
+	out, _ := e.call(t, toolDBQuery, map[string]any{"target": "dev-pg", "sql": "SELECT 1"})
+	hint, _ := out["hint"].(string)
+	if !strings.Contains(hint, "kept") || !strings.Contains(hint, "nobody needs to log in again") {
+		t.Errorf("the hint must say that the session is kept and that nobody needs to log in again: %q", hint)
+	}
+	if strings.Contains(hint, "force_refresh") || strings.Contains(hint, toolSessionOpen) {
+		t.Errorf("it must not send the agent to open a session, which would ask a person for nothing: %q", hint)
+	}
+}
+
+// session_open on a site whose saved session cannot be checked because the site is down must not ask a person to log in:
+// that would not make the site reachable, and the new account would replace one that is good.
+func TestSessionOpenDoesNotAskAPersonWhenTheSiteCannotBeReached(t *testing.T) {
+	rs := newRqSite(t)
+	g := withSession(t, rs, nil)
+	told := &notes{}
+	g.s.notify = told
+	rs.Close()
+	g.s.core.cache.MarkStale(site.Key(mustURL(t, rs.URL)))
+	out, isErr := g.call(t, toolSessionOpen, map[string]any{"url": rs.URL, "site": "gitlab", "wait": false})
+	if !isErr || out["code"] != "site_unreachable" {
+		t.Fatalf("%v", out)
+	}
+	if n := len(told.all()); n != 0 {
+		t.Errorf("a person was asked (%d messages) to log in to a site that is down", n)
+	}
+	if _, ok := g.s.core.cache.Peek(site.Key(mustURL(t, rs.URL))); !ok {
+		t.Error("the saved session must still be there")
 	}
 }

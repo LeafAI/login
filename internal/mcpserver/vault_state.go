@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"github.com/LeafAI/securl/internal/audit"
 	"github.com/LeafAI/securl/internal/flow"
 	"github.com/LeafAI/securl/internal/keyring"
 	"github.com/LeafAI/securl/internal/session"
@@ -38,6 +39,12 @@ func (s *Server) openCore() error {
 	}
 	c.cache = session.NewPersistent(session.NewStore(s.vault))
 	c.cache.Log = s.log
+	// A session the cache drops on its own (it expired, or the site refused it) is a decision the person did not make and
+	// would not otherwise hear of: the next call just finds no session. So it is written down, with the reason. Never the
+	// account: the key is a site or a database target name.
+	c.cache.OnDrop = func(key, reason string) {
+		s.audit.Record(audit.Event{Event: "session_dropped", Host: key, Result: reason})
+	}
 	c.mgr = flow.NewManager(flow.Config{
 		Keys:     c.keys,
 		Notifier: s.notify, Tunnels: s.tunnels, PageURL: s.cfg.Web.PageURL, TTL: s.cfg.Web.TTL, Log: s.log,

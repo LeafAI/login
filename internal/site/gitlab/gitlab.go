@@ -222,7 +222,7 @@ func (*driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *ht
 	req.Header.Set("Cookie", site.CookieHeader(s.Cookies))
 	resp, err := hc.Do(req)
 	if err != nil {
-		return err
+		return site.Unreachable(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 {

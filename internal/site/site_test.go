@@ -1,7 +1,10 @@
 package site_test
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/LeafAI/securl/internal/site"
@@ -20,5 +23,20 @@ func TestResolve(t *testing.T) {
 	other, _ := url.Parse("https://other.example/")
 	if _, err := site.Resolve("", other); err == nil {
 		t.Error("expected no-match error")
+	}
+}
+
+func TestUnreachableMarksATransportFailureAndKeepsItsText(t *testing.T) {
+	cause := errors.New("dial tcp 10.0.0.1:443: connect: connection refused")
+	got := site.Unreachable(cause)
+	if !errors.Is(got, site.ErrUnreachable) || !strings.Contains(got.Error(), "connection refused") {
+		t.Errorf("%v", got)
+	}
+	if site.Unreachable(nil) != nil {
+		t.Error("nothing to mark")
+	}
+	already := fmt.Errorf("%w: x", site.ErrUnreachable)
+	if site.Unreachable(already) != already {
+		t.Error("an error that is already marked is not wrapped twice")
 	}
 }

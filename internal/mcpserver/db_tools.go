@@ -67,10 +67,13 @@ func (s *Server) dbTarget(k *core, name string) (config.Database, *site.Session,
 		e.Hint = "Call " + toolDBTargets + " to see the targets the owner has configured."
 		return t, nil, e
 	}
-	e, ok := k.cache.GetWithin(context.Background(), dbsite.BaseURL(t.Name), nil, sessionFreshness)
-	if !ok {
-		te := errf("no_session", false, "there is no session for the database %s", t.Name)
-		te.Hint = "Call " + toolSessionOpen + " with url " + dbsite.BaseURL(t.Name).String() + ": a person types the database account once, then " + toolDBQuery + " uses it."
+	e, err := k.cache.Lookup(context.Background(), dbsite.BaseURL(t.Name), nil, s.fresh)
+	if err != nil {
+		open := "Call " + toolSessionOpen + " with url " + dbsite.BaseURL(t.Name).String() + ": a person types the database account once, then " + toolDBQuery + " uses it."
+		te := sessionLost(err, "the database "+t.Name, "Call "+toolSessionOpen+" with url "+dbsite.BaseURL(t.Name).String()+" and force_refresh=true: a person types the account again.", "there is no session for the database "+t.Name)
+		if te.Code == "no_session" {
+			te.Hint = open
+		}
 		return t, nil, te
 	}
 	return t, e.Session, nil
@@ -136,7 +139,9 @@ func (s *Server) dbTargets(_ context.Context, _ *mcp.CallToolRequest, _ Empty) (
 		info := DBTargetInfo{Name: t.Name, Driver: t.Driver, Environment: t.Environment, Mode: t.Mode, AllowDDL: t.AllowsDDL(),
 			Databases: append([]string{}, t.Databases...), MaxRows: t.MaxRowLimit(), MaxChangedRows: t.ChangedRowsLimit()}
 		if k != nil {
-			_, ok := k.cache.GetWithin(context.Background(), dbsite.BaseURL(t.Name), nil, sessionFreshness)
+			// "has an account", not "the database accepts it right now": listing the targets must not connect to any of
+			// them, and a database that is down must not make its account look gone.
+			_, ok := k.cache.Peek(dbsite.Key(t.Name))
 			info.HasSession = ok
 		}
 		out.Targets = append(out.Targets, info)

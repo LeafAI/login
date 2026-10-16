@@ -232,7 +232,7 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 	req.Header.Set("Authorization", s.Headers["Authorization"])
 	resp, err := hc.Do(req)
 	if err != nil {
-		return err
+		return site.Unreachable(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != 200 {

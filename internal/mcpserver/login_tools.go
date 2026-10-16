@@ -96,10 +96,16 @@ func (s *Server) ensureLogin(ctx context.Context, req *mcp.CallToolRequest, raw,
 		return &out, nil
 	}
 	if !force {
-		if e, ok := c.cache.Get(ctx, base, s.hc); ok {
+		e, err := c.cache.Lookup(ctx, base, s.hc, 0)
+		if err == nil {
 			out := sessionOutput(e.Site, base, e.Session)
 			out.Cached = true
 			return &out, nil
+		}
+		if errors.Is(err, site.ErrUnreachable) {
+			// The saved session is kept. Asking a person to log in again would not fix a site that cannot be reached, and it
+			// would replace an account that is good.
+			return nil, sessionLost(err, base.Host, "", "")
 		}
 	} else {
 		c.cache.Delete(session.Key(base))
