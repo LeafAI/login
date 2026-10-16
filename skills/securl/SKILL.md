@@ -1,6 +1,6 @@
 ---
 name: securl
-description: Install, update, set up and use the securl MCP server, which lets an AI agent reach websites that need a human login (GitLab, Jenkins, Kibana, KubeSphere, Nightingale, Archery, SkyWalking) without ever seeing a password, cookie or token. Use when the user wants to install or configure securl, unlock its vault, log in to an internal site, call a site's API through it, or run Archery SQL; also when a securl tool answers vault_locked, no_session or session_expired.
+description: Install, update, set up and use the securl MCP server, which lets an AI agent reach websites that need a human login (GitLab, Jenkins, Kibana, KubeSphere, Nightingale, Archery, RocketMQ Dashboard, SkyWalking) without ever seeing a password, cookie or token. Use when the user wants to install or configure securl, unlock its vault, log in to an internal site, call a site's API through it, or run Archery SQL; also when a securl tool answers vault_locked, no_session or session_expired.
 ---
 
 # securl
@@ -164,6 +164,9 @@ The server starts **locked**. Follow this order and do not skip a step.
    - `redactions` counts the secret values removed from the answer. Treat any `[REDACTED]` as intended.
    - Archery is not reachable with `request` (`request_not_allowed`): use the `archery_*` tools below. Only the owner
      can lift this (`security.allow_archery_requests`); do not look for another way around it.
+   - RocketMQ Dashboard has a request policy: only `GET` of `.query` paths, and nothing under `/message/`,
+     `/messageTrace/` or `/dlqMessage/` (message bodies; the owner opens them with `site_options.rocketmq.allow_message_body`).
+     Anything else answers `request_not_allowed` and is never sent; do not look for another way around it.
 6. A site that needs no login (SkyWalking) works with `request` directly; `session_open` just confirms `auth: none`.
 
 When `request` answers `401` or `session_expired`, the session ended: call `session_open` with `force_refresh: true`.

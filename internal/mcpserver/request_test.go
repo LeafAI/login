@@ -780,3 +780,155 @@ func TestRequestRefusesArcheryWhateverDriverTheSessionWasOpenedWith(t *testing.T
 		}
 	}
 }
+
+// ---- a site's request policy: refused in securl, so the site never hears of it ----
+
+// policyDriver is a site whose policy lets only GET of paths ending in .query through.
+type policyDriver struct{ name string }
+
+func (d policyDriver) Name() string      { return d.name }
+func (policyDriver) Match(*url.URL) bool { return false }
+func (policyDriver) NeedsLogin() bool    { return true }
+func (policyDriver) Login(context.Context, *url.URL, site.Asker, *http.Client) (*site.Session, error) {
+	return nil, errors.New("unused")
+}
+func (policyDriver) Probe(context.Context, *url.URL, *site.Session, *http.Client) error { return nil }
+func (policyDriver) CheckRequest(method, path string) error {
+	return site.AllowList{Methods: []string{"GET"}, Suffix: ".query", Deny: []string{"/message/"}}.Check(method, path)
+}
+
+func init() { site.Register(policyDriver{name: "policytest"}) }
+
+func withPolicy(t *testing.T, rs *rqSite) *gateEnv {
+	t.Helper()
+	g := gateServer(t, "open", func(c *config.Config) {
+		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "policytest"}
+	})
+	d, _ := site.Resolve("policytest", nil)
+	g.s.core.cache.Put(mustURL(t, rs.URL), d, &site.Session{Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}}})
+	return g
+}
+
+func TestARequestThePolicyRefusesIsNeverSent(t *testing.T) {
+	rs := newRqSite(t)
+	g := withPolicy(t, rs)
+	for name, args := range map[string]map[string]any{
+		"a write path":         {"method": "GET", "path": "/topic/deleteTopic.do"},
+		"a write method":       {"method": "POST", "path": "/topic/list.query", "json": map[string]any{"a": 1}},
+		"delete":               {"method": "DELETE", "path": "/topic/list.query"},
+		"denied prefix":        {"method": "GET", "path": "/message/viewMessage.query"},
+		"denied, other case":   {"method": "GET", "path": "/MESSAGE/viewMessage.query"},
+		"dot segment":          {"method": "GET", "path": "/topic/../message/viewMessage.query"},
+		"doubled slash":        {"method": "GET", "path": "//message/viewMessage.query"},
+		"suffix hides a write": {"method": "GET", "path": "/topic/deleteTopic.do", "query": map[string]any{"x": ".query"}},
+	} {
+		args["url"] = rs.URL
+		out, isErr := g.call(t, toolRequest, args)
+		// The proxy itself refuses some of these shapes (a path it cannot send); either way the answer is a refusal and nothing
+		// went out.
+		if !isErr || (out["code"] != "request_not_allowed" && out["code"] != "invalid_argument") {
+			t.Errorf("%s: %v", name, out)
+		}
+	}
+	if n := rs.count(); n != 0 {
+		t.Fatalf("a refused request must reach the site never: %d went out", n)
+	}
+}
+
+func TestARefusalNamesThePolicyAndTellsTheAgentNotToLookForAWayAround(t *testing.T) {
+	rs := newRqSite(t)
+	g := withPolicy(t, rs)
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/topic/deleteTopic.do"})
+	if !isErr || out["code"] != "request_not_allowed" || out["retryable"] != false {
+		t.Fatalf("%v", out)
+	}
+	hint, _ := out["hint"].(string)
+	if !strings.Contains(hint, "policy") || !strings.Contains(strings.ToLower(hint), "do not") {
+		t.Errorf("the hint says it is the site's policy and that there is no way around it: %q", hint)
+	}
+	if strings.Contains(raw(out), rqCookie) {
+		t.Errorf("%v", out)
+	}
+}
+
+func TestARequestThePolicyAllowsIsSentWithTheSessionsCredentials(t *testing.T) {
+	rs := newRqSite(t)
+	g := withPolicy(t, rs)
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/topic/list.query"})
+	if isErr || out["status"] != float64(200) {
+		t.Fatalf("%v", out)
+	}
+	if rs.count() != 1 || !strings.Contains(rs.last().Cookie, "sid="+rqCookie) {
+		t.Errorf("%d requests, last %+v", rs.count(), rs.last())
+	}
+}
+
+// The check comes before the session is looked at, so a refused request does not even probe the site, and a site without a
+// policy is not restricted at all.
+func TestASiteWithoutAPolicyIsNotRestricted(t *testing.T) {
+	rs := newRqSite(t)
+	g := withSession(t, rs, nil) // gitlab: no policy
+	if out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "DELETE", "path": "/anything.do"}); isErr {
+		t.Errorf("%v", out)
+	}
+	if rs.count() != 1 {
+		t.Errorf("%d", rs.count())
+	}
+}
+
+func TestARefusedRequestIsAuditedAsRefusedWithoutItsBody(t *testing.T) {
+	rs := newRqSite(t)
+	g := withPolicy(t, rs)
+	g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "POST", "path": "/topic/deleteTopic.do", "json": map[string]any{"secret": "BODY-SECRET-VALUE-123"}})
+	log := readFile(t, g.cfg.Audit.File)
+	if !strings.Contains(log, `"event":"request_refused"`) || !strings.Contains(log, "policytest") {
+		t.Errorf("a refusal is recorded:\n%s", log)
+	}
+	if strings.Contains(log, "BODY-SECRET-VALUE-123") {
+		t.Errorf("the body is not:\n%s", log)
+	}
+}
+
+// Every refusal above could also be the proxy's own (it refuses some shapes of path). These are paths and methods the proxy
+// would send without a word, so that what stops them can only be the policy.
+func TestWhatOnlyThePolicyStops(t *testing.T) {
+	rs := newRqSite(t)
+	g := withPolicy(t, rs)
+	for name, args := range map[string]map[string]any{
+		"a write path":     {"method": "GET", "path": "/topic/deleteTopic.do"},
+		"a write method":   {"method": "POST", "path": "/topic/list.query"},
+		"put":              {"method": "PUT", "path": "/topic/list.query"},
+		"patch":            {"method": "PATCH", "path": "/topic/list.query"},
+		"denied prefix":    {"method": "GET", "path": "/message/viewMessage.query"},
+		"denied, any case": {"method": "GET", "path": "/Message/viewMessage.query"},
+		"no suffix":        {"method": "GET", "path": "/topic/list"},
+		"options":          {"method": "OPTIONS", "path": "/topic/list.query"},
+		"head":             {"method": "HEAD", "path": "/topic/list.query"},
+	} {
+		args["url"] = rs.URL
+		out, isErr := g.call(t, toolRequest, args)
+		if !isErr || out["code"] != "request_not_allowed" {
+			t.Errorf("%s: want request_not_allowed, got %v", name, out)
+		}
+	}
+	if n := rs.count(); n != 0 {
+		t.Fatalf("%d requests went out", n)
+	}
+}
+
+// The policy holds before anybody has logged in: asking first must not change what is allowed, and a refused request must
+// not so much as ask for a session.
+func TestThePolicyDoesNotDependOnALoginAndIsAppliedBeforeTheSessionIsLookedAt(t *testing.T) {
+	rs := newRqSite(t)
+	g := gateServer(t, "open", func(c *config.Config) {
+		c.Aliases = map[string]string{strings.TrimPrefix(rs.URL, "http://"): "policytest"}
+	}) // no session at all
+	out, isErr := g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/topic/deleteTopic.do"})
+	if !isErr || out["code"] != "request_not_allowed" {
+		t.Errorf("a refused request is refused whether or not there is a session: %v", out)
+	}
+	out, isErr = g.call(t, toolRequest, map[string]any{"url": rs.URL, "method": "GET", "path": "/topic/list.query"})
+	if !isErr || out["code"] != "no_session" {
+		t.Errorf("an allowed one still needs a session: %v", out)
+	}
+}

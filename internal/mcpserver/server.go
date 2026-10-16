@@ -193,7 +193,7 @@ func (s *Server) register(m *mcp.Server) error {
 		},
 		func() error {
 			return addTool(m, s.observe, spec[LoginOutput]{toolSessionOpen, "Open a session on a website",
-				"Get a session on a website (gitlab, jenkins, kibana, kubesphere, nightingale, archery, skywalking, or a configured site). A person types the credential once, on a page opened from a DingTalk link; the agent never sees the password. For archery the result carries no credentials (use the archery_* tools). If still pending after max_block_seconds, call " + toolSessionWait + " with the returned login_id.", open(false)}, s.login)
+				"Get a session on a website (gitlab, jenkins, kibana, kubesphere, nightingale, archery, skywalking, rocketmq, or a configured site). A person types the credential once, on a page opened from a DingTalk link; the agent never sees the password. For archery the result carries no credentials (use the archery_* tools). If still pending after max_block_seconds, call " + toolSessionWait + " with the returned login_id.", open(false)}, s.login)
 		},
 		func() error {
 			return addTool(m, s.observe, spec[LoginOutput]{toolSessionWait, "Wait for a session being opened", "Keep waiting for a session that " + toolSessionOpen + " asked a person for.", open(true)}, s.loginWait)

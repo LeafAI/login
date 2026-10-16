@@ -159,6 +159,13 @@ the session was opened with, by the configured alias and by the host name, so ch
 does not get around it. The switch is the owner's: the agent cannot set it, and `securl://policy` shows it as
 `archery_requests_allowed`.
 
+**A site may have a request policy** (`request_not_allowed`, not retryable). It is applied before anything is sent, the session
+check included, so a refused request never reaches the site; it is audited as `request_refused` (method, path, host). The
+policy depends on the driver the host resolves to, never on whether someone has logged in, and the agent cannot widen it.
+Today only **RocketMQ Dashboard** has one: `GET` of a `.query` path and nothing else (every `.do` path writes), and nothing
+under `/message/`, `/messageTrace/` or `/dlqMessage/`, because a message holds business data. The owner opens the message
+paths with `site_options.rocketmq.allow_message_body: "yes"`. Writes stay refused in any case.
+
 Input
 ```jsonc
 { "type":"object", "required":["url","method","path"], "additionalProperties":false, "properties":{
@@ -197,7 +204,7 @@ headers. A cookie the site rotates is kept for the next call (and stored in the 
 it; the layers that do not depend on the scrubber are that the agent cannot send credentials, can only reach the
 session's own site (an absolute path on that origin), and never follows a redirect off the site or down from https.
 
-Errors: `vault_locked`/`vault_not_initialized`, `no_session`, `host_not_allowed`, `request_not_allowed` (Archery, see above), `invalid_argument` (the refusals above,
+Errors: `vault_locked`/`vault_not_initialized`, `no_session`, `host_not_allowed`, `request_not_allowed` (Archery, or the site's request policy, see above), `invalid_argument` (the refusals above,
 before anything is sent), `session_expired`, `site_unreachable` (the message never contains the URL or a credential).
 Each call is audited as `request`: method, path (never the query), status, size, host.
 
