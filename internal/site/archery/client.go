@@ -81,7 +81,7 @@ func (c *Client) finish(code int, raw string, err error) func(string, any) error
 		}
 		if out != nil {
 			if err := json.Unmarshal([]byte(raw), out); err != nil {
-				return &APIError{path, "unexpected response: " + site.Clip(raw, 160)}
+				return &APIError{path, "unexpected response: " + describeUnreadable(raw, err)}
 			}
 		}
 		return nil
