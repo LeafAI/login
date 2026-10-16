@@ -600,3 +600,128 @@ func TestAShortPasswordIsLeftAloneRatherThanDamagingTheAnswer(t *testing.T) {
 		t.Errorf("a password under the minimum length is not scrubbed (it would damage ordinary text): %q %d", got, n)
 	}
 }
+
+// A credential belongs to a target, not to a kind of database. Two MySQL targets (a development one and a test one, or a
+// read-only one and a writing one on the same host) each keep their own account, and neither one's login, use or close
+// touches the other's.
+func putAccount(e *dbEnv, name, user, pass string) {
+	e.s.core.cache.Put(dbsite.BaseURL(name), dbsite.New(e.cfg.Database, nil), &site.Session{
+		Tokens: map[string]string{dbsite.TokenUser: user, dbsite.TokenPassword: pass}})
+}
+
+func TestTwoTargetsOfTheSameEngineKeepTheirOwnAccounts(t *testing.T) {
+	e := withDB(t)
+	putAccount(e, "dev-my", "dev_reader", "DEV-PASSWORD-1111")
+	putAccount(e, "dev-my-ddl", "test_writer", "TEST-PASSWORD-2222")
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-my", "database": "appdb", "sql": "SELECT 1"}); isErr {
+		t.Fatalf("%v", out)
+	}
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-my-ddl", "sql": "SELECT 1"}); isErr {
+		t.Fatalf("%v", out)
+	}
+	o := e.fake.opens()
+	if len(o) != 2 {
+		t.Fatalf("%+v", o)
+	}
+	if o[0].target != "dev-my" || o[0].user != "dev_reader" || o[0].pass != "DEV-PASSWORD-1111" {
+		t.Errorf("the first target must be opened with its own account: %+v", o[0])
+	}
+	if o[1].target != "dev-my-ddl" || o[1].user != "test_writer" || o[1].pass != "TEST-PASSWORD-2222" {
+		t.Errorf("the second target must be opened with its own account: %+v", o[1])
+	}
+}
+
+func TestLoggingInToOneTargetDoesNotReplaceTheOthersAccount(t *testing.T) {
+	e := withDB(t)
+	putAccount(e, "dev-my", "dev_reader", "DEV-PASSWORD-1111")
+	putAccount(e, "dev-my-ddl", "test_writer", "TEST-PASSWORD-2222")
+	putAccount(e, "dev-my", "dev_reader2", "DEV-PASSWORD-3333") // the same target again: replaced
+	e.call(t, toolDBQuery, map[string]any{"target": "dev-my", "database": "appdb", "sql": "SELECT 1"})
+	e.call(t, toolDBQuery, map[string]any{"target": "dev-my-ddl", "sql": "SELECT 1"})
+	o := e.fake.opens()
+	if len(o) != 2 || o[0].user != "dev_reader2" || o[0].pass != "DEV-PASSWORD-3333" {
+		t.Errorf("logging in again to a target replaces that target's account: %+v", o)
+	}
+	if o[1].user != "test_writer" || o[1].pass != "TEST-PASSWORD-2222" {
+		t.Errorf("and only that target's: %+v", o)
+	}
+}
+
+func TestClosingOneTargetKeepsTheOthersOfTheSameEngine(t *testing.T) {
+	e := withDB(t)
+	putAccount(e, "dev-my", "dev_reader", "DEV-PASSWORD-1111")
+	putAccount(e, "dev-my-ddl", "test_writer", "TEST-PASSWORD-2222")
+	if out, _ := e.call(t, toolSessionClose, map[string]any{"url": "db://dev-my"}); out["removed"] != float64(1) {
+		t.Fatalf("%v", out)
+	}
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-my", "database": "appdb", "sql": "SELECT 1"}); !isErr || out["code"] != "no_session" {
+		t.Errorf("the closed target has no account: %v", out)
+	}
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-my-ddl", "sql": "SELECT 1"}); isErr {
+		t.Errorf("the other target of the same engine must be untouched: %v", out)
+	}
+	list, _ := e.call(t, toolDBTargets, map[string]any{})
+	has := map[string]bool{}
+	for _, x := range list["targets"].([]any) {
+		m := x.(map[string]any)
+		has[m["name"].(string)] = m["has_session"].(bool)
+	}
+	if has["dev-my"] || !has["dev-my-ddl"] {
+		t.Errorf("db_targets says %v", has)
+	}
+}
+
+// A name that is a prefix of another must not reach it, in either direction: "dev-my" is not "dev-my-ddl".
+func TestATargetNameThatIsAPrefixOfAnotherDoesNotShareItsAccount(t *testing.T) {
+	e := withDB(t)
+	putAccount(e, "dev-my-ddl", "test_writer", "TEST-PASSWORD-2222")
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-my", "database": "appdb", "sql": "SELECT 1"}); !isErr || out["code"] != "no_session" {
+		t.Errorf("an account kept for dev-my-ddl must not serve dev-my: %v", out)
+	}
+	if out, _ := e.call(t, toolSessionClose, map[string]any{"url": "db://dev-my"}); out["removed"] != float64(0) {
+		t.Errorf("closing dev-my must not remove dev-my-ddl's account: %v", out)
+	}
+	if out, isErr := e.call(t, toolDBQuery, map[string]any{"target": "dev-my-ddl", "sql": "SELECT 1"}); isErr {
+		t.Errorf("dev-my-ddl keeps its account: %v", out)
+	}
+}
+
+// The vault is what survives a restart, so the same must hold there: a new process finds each target's own account.
+func TestEachTargetsAccountSurvivesARestartSeparately(t *testing.T) {
+	e := withDB(t)
+	putAccount(e, "dev-my", "dev_reader", "DEV-PASSWORD-1111")
+	putAccount(e, "dev-my-ddl", "test_writer", "TEST-PASSWORD-2222")
+	// A second server on the same vault and configuration: it starts with an empty cache and reads the vault.
+	fake2 := &fakeDB{rows: [][]any{{1}}}
+	srv2, s2, err := New(e.cfg, Options{Notifier: quiet{}, Tunnels: noTunnels{}, Log: func(string, ...any) {}, Vault: e.v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s2.Close)
+	s2.db = fake2
+	g2 := &gateEnv{s: s2, cs: connect(t, s2, srv2), v: e.v, cfg: e.cfg, dir: e.dir}
+	for _, tc := range []struct {
+		target, database, user, pass string
+	}{{"dev-my", "appdb", "dev_reader", "DEV-PASSWORD-1111"}, {"dev-my-ddl", "", "test_writer", "TEST-PASSWORD-2222"}} {
+		args := map[string]any{"target": tc.target, "sql": "SELECT 1"}
+		if tc.database != "" {
+			args["database"] = tc.database
+		}
+		if out, isErr := g2.call(t, toolDBQuery, args); isErr {
+			t.Fatalf("%s after a restart: %v", tc.target, out)
+		}
+	}
+	// A session read back from the vault is probed once before it is used (the probe connects), so a target may be opened
+	// twice. What matters is that every connection to a target uses that target's account and no other.
+	want := map[string][2]string{"dev-my": {"dev_reader", "DEV-PASSWORD-1111"}, "dev-my-ddl": {"test_writer", "TEST-PASSWORD-2222"}}
+	seen := map[string]int{}
+	for _, c := range fake2.opens() {
+		seen[c.target]++
+		if w, ok := want[c.target]; !ok || c.user != w[0] || c.pass != w[1] {
+			t.Errorf("after a restart %s was opened with %s/%s: each target must come back with its own account", c.target, c.user, c.pass)
+		}
+	}
+	if seen["dev-my"] == 0 || seen["dev-my-ddl"] == 0 {
+		t.Errorf("both targets must have been used after the restart: %v", seen)
+	}
+}
