@@ -37,6 +37,11 @@ func (s *Server) request(ctx context.Context, _ *mcp.CallToolRequest, in Request
 	if terr != nil {
 		return nil, terr
 	}
+	// The site's own policy is applied before anything else touches the site, the session check included: a refused request
+	// must not so much as probe it.
+	if terr := s.checkPolicy(k, base, in.Method, in.Path); terr != nil {
+		return nil, terr
+	}
 	siteName, sess, terr := s.sessionFor(ctx, k, base)
 	if terr != nil {
 		return nil, terr
@@ -64,6 +69,30 @@ func (s *Server) request(ctx context.Context, _ *mcp.CallToolRequest, in Request
 		out.Hint = requestExpiredHint
 	}
 	return out, nil
+}
+
+// checkPolicy applies the request policy of the driver that serves base, if it has one. The driver is the one the session was
+// opened with, or, with no session, the one the configuration says the host is: a policy must not depend on whether somebody
+// has logged in, or an agent could ask first and be allowed.
+func (s *Server) checkPolicy(k *core, base *url.URL, method, path string) *ToolError {
+	var d site.Driver
+	if e, ok := k.cache.Peek(session.Key(base)); ok {
+		d = e.Driver
+	}
+	if d == nil {
+		d, _ = site.Resolve(s.alias(base), base)
+	}
+	if d == nil {
+		return nil
+	}
+	err := site.CheckRequest(d, method, path)
+	if err == nil {
+		return nil
+	}
+	s.audit.Record(audit.Event{Event: "request_refused", Site: d.Name(), Host: base.Host, Method: clip(method, 12), Path: clip(path, 200)})
+	e := errf("request_not_allowed", false, "%v", err)
+	e.Hint = "This is the site's request policy: the request tool only lets through what the policy lists, and an agent cannot widen it. Do not look for another way around it; if the request is needed, ask the owner to open it in the site's options."
+	return e
 }
 
 // archeryDriver is the driver name of Archery, the one site the request tool refuses unless the owner allows it.

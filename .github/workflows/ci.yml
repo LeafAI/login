@@ -32,6 +32,7 @@ jobs:
     env:
       SECURL_TEST_PG: 127.0.0.1:5432
       SECURL_TEST_MYSQL: 127.0.0.1:3306
+      SECURL_TEST_ROCKETMQ: 127.0.0.1:28080
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -51,6 +52,9 @@ jobs:
           sleep 3
           PGPASSWORD=rootpw psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f scripts/dbtest/postgres.sql
           mysql -h 127.0.0.1 -uroot -prootpw appdb < scripts/dbtest/mysql.sql
+      # A throwaway RocketMQ with its Dashboard (scripts/mqtest): the fixture's accounts, the loopback only.
+      - name: Start RocketMQ and its Dashboard
+        run: scripts/mqtest/up.sh
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...

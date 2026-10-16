@@ -17,6 +17,7 @@ import (
 	_ "github.com/LeafAI/securl/internal/site/kubesphere"
 	_ "github.com/LeafAI/securl/internal/site/nightingale"
 	_ "github.com/LeafAI/securl/internal/site/noauth"
+	_ "github.com/LeafAI/securl/internal/site/rocketmq"
 )
 
 type result struct {

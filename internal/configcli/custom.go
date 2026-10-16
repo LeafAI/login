@@ -55,7 +55,7 @@ func siteCustom(env Env) error {
 
 func isBuiltin(name string) bool {
 	switch name {
-	case "gitlab", "jenkins", "kibana", "kubesphere", "nightingale", "archery", "skywalking":
+	case "gitlab", "jenkins", "kibana", "kubesphere", "nightingale", "archery", "skywalking", "rocketmq":
 		return true
 	}
 	return false

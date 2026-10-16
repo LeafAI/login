@@ -1,7 +1,7 @@
 # securl
 
 A secure URL requestor for AI agents: an MCP server that gets an agent into sites that need a human to type credentials
-(GitLab, Jenkins, Kibana, KubeSphere, Nightingale v7, Archery, SkyWalking, and any site you describe in YAML). A person
+(GitLab, Jenkins, Kibana, KubeSphere, Nightingale v7, Archery, RocketMQ Dashboard, SkyWalking, and any site you describe in YAML). A person
 types the credential once, on a page opened from a DingTalk link, and the agent never sees the password.
 
 Secrets are kept in an encrypted vault that is locked at start and opened by the person typing its passphrase
@@ -341,7 +341,14 @@ unreachable LDAP both answer `200 {"status":500}`, so that message names both ca
 its source, and 7.9.3 against a live site. **Nightingale** (v7) was checked against its source: login payload, the optional math-image captcha (shown to
 the human inside the login step) and optional RSA password encryption.
 
+**RocketMQ Dashboard** was checked against a real Dashboard 2.0.1 (with a NameServer and a Broker) in a container, in the tests
+(`scripts/mqtest`): login, the session probe, reads, the refusal of every write and of the message paths by the request policy,
+and that a normal user gets "no permission" on `.do` writes. It was **not** run against the production Dashboard: its login
+page and its public certificate were looked at, nothing was logged in to. The Dashboard takes the password in the URL query;
+securl removes it from every error and result it produces, but it cannot reach the logs of a gateway or of the Dashboard.
+
 **Not verified against live systems:**
+- the RocketMQ Dashboard of the company (only the 2.0.1 image was driven);
 - the individual SSH provider services (use `securl doctor -tunnel`);
 - Kibana's, Jenkins's and KubeSphere's second-factor paths: stock versions have none, and the retry path for custom setups is a
   guess that has never run against a real one (a 2FA plugin's extra step on Jenkins is reported as an error, not guessed);
