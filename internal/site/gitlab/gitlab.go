@@ -225,10 +225,7 @@ func (*driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *ht
 		return site.Unreachable(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("gitlab session invalid: %s", resp.Status)
-	}
-	return nil
+	return site.ProbeStatus("gitlab", resp.StatusCode)
 }
 
 // Inspect reports, from the unauthenticated sign-in page, which form Login would use.

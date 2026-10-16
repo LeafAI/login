@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -844,5 +846,87 @@ func TestSessionOpenDoesNotAskAPersonWhenTheSiteCannotBeReached(t *testing.T) {
 	}
 	if _, ok := g.s.core.cache.Peek(site.Key(mustURL(t, rs.URL))); !ok {
 		t.Error("the saved session must still be there")
+	}
+}
+
+// ---- a site behind a gateway: the gateway answers 502/503/504 while the service restarts, then the site is back ----
+
+// flappingSite answers the probe with whatever status is set, and every other path as a valid session would see it.
+type flappingSite struct {
+	*httptest.Server
+	mu     sync.Mutex
+	status int
+	probes int
+}
+
+func newFlappingSite(t *testing.T) *flappingSite {
+	t.Helper()
+	f := &flappingSite{status: 200}
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		code := f.status
+		if r.URL.Path == "/api/v4/user" {
+			f.probes++
+		}
+		f.mu.Unlock()
+		if code != 200 {
+			http.Error(w, "gateway says "+fmt.Sprint(code), code)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	t.Cleanup(f.Close)
+	return f
+}
+
+func (f *flappingSite) set(code int) { f.mu.Lock(); f.status = code; f.mu.Unlock() }
+
+func TestAGatewayErrorKeepsTheSessionAndTheNextCallAfterItUsesIt(t *testing.T) {
+	for _, code := range []int{502, 503, 504, 429} {
+		f := newFlappingSite(t)
+		g := gateServer(t, "open", func(c *config.Config) {
+			c.Aliases = map[string]string{strings.TrimPrefix(f.URL, "http://"): "gitlab"}
+		})
+		d, _ := site.Resolve("gitlab", nil)
+		key := site.Key(mustURL(t, f.URL))
+		g.s.core.cache.Put(mustURL(t, f.URL), d, &site.Session{Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}}})
+
+		g.s.core.cache.MarkStale(key)
+		f.set(code)
+		out, isErr := g.call(t, toolRequest, map[string]any{"url": f.URL, "method": "GET", "path": "/x"})
+		if !isErr || out["code"] != "site_unreachable" || out["retryable"] != true {
+			t.Errorf("HTTP %d: %v", code, out)
+			continue
+		}
+		if _, ok := g.s.core.cache.Peek(key); !ok {
+			t.Errorf("HTTP %d: the session must still be there", code)
+		}
+		f.set(200) // the service is back
+		g.s.core.cache.MarkStale(key)
+		if out, isErr := g.call(t, toolRequest, map[string]any{"url": f.URL, "method": "GET", "path": "/x"}); isErr || out["status"] != float64(200) {
+			t.Errorf("HTTP %d: after it comes back the same session works: %v", code, out)
+		}
+	}
+}
+
+func TestAnAnswerThatMeansLoggedOutStillEndsTheSession(t *testing.T) {
+	for _, code := range []int{401, 403, 500} {
+		f := newFlappingSite(t)
+		g := gateServer(t, "open", func(c *config.Config) {
+			c.Aliases = map[string]string{strings.TrimPrefix(f.URL, "http://"): "gitlab"}
+		})
+		d, _ := site.Resolve("gitlab", nil)
+		key := site.Key(mustURL(t, f.URL))
+		g.s.core.cache.Put(mustURL(t, f.URL), d, &site.Session{Cookies: []*http.Cookie{{Name: "sid", Value: rqCookie, Path: "/"}}})
+		g.s.core.cache.MarkStale(key)
+		f.set(code)
+		out, isErr := g.call(t, toolRequest, map[string]any{"url": f.URL, "method": "GET", "path": "/x"})
+		if !isErr || out["code"] != "session_expired" {
+			t.Errorf("HTTP %d: %v", code, out)
+		}
+		if _, ok := g.s.core.cache.Peek(key); ok {
+			t.Errorf("HTTP %d: the site said no, so the session is gone", code)
+		}
 	}
 }

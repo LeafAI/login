@@ -158,6 +158,9 @@ func (driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *htt
 		return site.Unreachable(err)
 	}
 	body := site.ReadBody(resp)
+	if site.TemporaryStatus(resp.StatusCode) {
+		return site.ProbeStatus("jenkins", resp.StatusCode)
+	}
 	var w who
 	if resp.StatusCode != 200 || json.Unmarshal([]byte(body), &w) != nil || !w.loggedIn() {
 		return fmt.Errorf("jenkins session is no longer authenticated")

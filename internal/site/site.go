@@ -30,6 +30,35 @@ func Unreachable(err error) error {
 	return fmt.Errorf("%w: %v", ErrUnreachable, err)
 }
 
+// TemporaryStatus reports whether an HTTP status says only that the site could not answer just now, which tells a session
+// probe nothing about the session: 502 (the gateway in front of the site could not reach it), 503 (not available), 504 (it
+// did not answer in time) and 429 (it asks to slow down).
+//
+// It is deliberately short. Every other status that is not a success counts as the site saying no, 500 included: some sites
+// answer 500 for a session that has ended, and keeping such a session would hide the fact that it is dead. The list was
+// checked against the real sites: with a session that is not valid GitLab, Kibana, Nightingale and KubeSphere answer 401,
+// Archery 1.x answers a 302 to its login page, Jenkins answers 200 for an anonymous user; none of them uses one of these.
+func TemporaryStatus(code int) bool {
+	switch code {
+	case 429, 502, 503, 504:
+		return true
+	}
+	return false
+}
+
+// ProbeStatus is what a session probe answers for the status a site returned: nil for 200, a "could not ask" error for a
+// temporary status (the session is kept) and a plain refusal for any other (the session is dropped). what names the
+// driver, for the message.
+func ProbeStatus(what string, code int) error {
+	switch {
+	case code == 200:
+		return nil
+	case TemporaryStatus(code):
+		return fmt.Errorf("%w: %s answered HTTP %d, which says nothing about the session", ErrUnreachable, what, code)
+	}
+	return fmt.Errorf("%s session invalid: HTTP %d", what, code)
+}
+
 // Field describes one input the human is asked for in a round.
 type Field struct {
 	Name   string `json:"name"`

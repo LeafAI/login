@@ -268,10 +268,7 @@ func (*driver) Probe(ctx context.Context, base *url.URL, s *site.Session, hc *ht
 		return site.Unreachable(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("kubesphere token invalid: %s", resp.Status)
-	}
-	return nil
+	return site.ProbeStatus("kubesphere", resp.StatusCode)
 }
 
 // Inspect reports which login method Login will use.
