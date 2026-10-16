@@ -143,3 +143,45 @@ func TestAReadOnlyAccountOnAReadOnlyTarget(t *testing.T) {
 		t.Errorf("%v", out)
 	}
 }
+
+// Two targets of the same engine, on the same server, each logged in with its own account on the real page: the read-only
+// account can read and cannot write, the other can write, and neither login replaced the other.
+func TestTwoTargetsOfOneEngineEachKeepTheirOwnAccountEndToEnd(t *testing.T) {
+	for _, driver := range []string{config.DriverPostgres, config.DriverMySQL} {
+		t.Run(driver, func(t *testing.T) {
+			ro := dbTarget(t, driver, "reader", config.ModeReadOnly)
+			rw := dbTarget(t, driver, "writer", config.ModeReadWrite)
+			e := setupWith(t, func(c *config.Config) { c.Databases = []config.Database{ro, rw} })
+			loginDB(t, e, "reader", "ro", "ro-pass-1")
+			loginDB(t, e, "writer", "rw", "rw-pass-1")
+
+			if out, isErr := e.call(t, "db_query", map[string]any{"target": "reader", "sql": "SELECT count(*) AS n FROM items"}); isErr {
+				t.Fatalf("the read-only target must still work after the second login: %v", out)
+			}
+			if out, isErr := e.call(t, "db_exec", map[string]any{"target": "writer", "sql": "UPDATE items SET qty = qty WHERE id <= 2", "reason": "two accounts"}); isErr || out["rows_affected"] != float64(2) {
+				t.Fatalf("the writing target must use the writing account: %v", out)
+			}
+			// What the database itself says about who it was: the same server, two different accounts.
+			who := map[string]string{config.DriverPostgres: "SELECT current_user AS u", config.DriverMySQL: "SELECT SUBSTRING_INDEX(CURRENT_USER(), '@', 1) AS u"}[driver]
+			got := map[string]string{}
+			for _, target := range []string{"reader", "writer"} {
+				out, isErr := e.call(t, "db_query", map[string]any{"target": target, "sql": who})
+				if isErr {
+					t.Fatalf("%s: %v", target, out)
+				}
+				got[target] = fmt.Sprint(out["rows"].([]any)[0].([]any)[0])
+			}
+			if got["reader"] != "ro" || got["writer"] != "rw" {
+				t.Errorf("each target must connect as its own account: %v", got)
+			}
+			// Closing one leaves the other.
+			e.call(t, "session_close", map[string]any{"url": "db://reader"})
+			if out, isErr := e.call(t, "db_query", map[string]any{"target": "reader", "sql": "SELECT 1"}); !isErr || out["code"] != "no_session" {
+				t.Errorf("%v", out)
+			}
+			if out, isErr := e.call(t, "db_query", map[string]any{"target": "writer", "sql": "SELECT 1"}); isErr {
+				t.Errorf("the other target must be untouched: %v", out)
+			}
+		})
+	}
+}
